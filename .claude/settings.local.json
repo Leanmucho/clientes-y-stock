@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npx --version)",
+      "Bash(npx create-expo-app@latest . --template blank-typescript)",
+      "Bash(npx create-expo-app@latest temp-expo --template blank-typescript)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx expo:*)",
+      "Bash(node -e \"const p = require\\(''./package.json''\\); console.log\\(''expo:'', p.dependencies.expo\\)\")",
+      "Bash(node -e \":*)",
+      "Bash(node -e \"const p = require\\(''./package.json''\\); console.log\\(''react-native:'', p.dependencies[''react-native'']\\); console.log\\(''react:'', p.dependencies[''react'']\\);\")",
+      "Bash(./node_modules/.bin/tsc --version)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(git init:*)",
+      "Bash(/c/Users/leanm/Desktop/pla/.gitignore:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
