@@ -1,5 +1,9 @@
 import { supabase } from './supabase';
-import { Client, Sale, Installment, Product } from '../types';
+import { Client, Sale, SaleItem, Installment, Product, ClientPayment } from '../types';
+import { cacheGet, cacheSet, cacheInvalidate, cacheInvalidatePrefix } from './cache';
+
+const TTL_SHORT = 30_000;   // 30s — dashboard, cobros
+const TTL_LONG  = 120_000;  // 2min — clients, products lists
 
 export async function initDatabase() {
   await markOverdueInstallments();
@@ -7,8 +11,12 @@ export async function initDatabase() {
 
 // --- CLIENTS ---
 export async function getClients(): Promise<Client[]> {
+  const cached = cacheGet<Client[]>('clients', TTL_LONG);
+  if (cached) return cached;
   const { data } = await supabase.from('clients').select('*').order('name');
-  return (data ?? []) as Client[];
+  const result = (data ?? []) as Client[];
+  cacheSet('clients', result);
+  return result;
 }
 
 export async function getClient(id: number): Promise<Client | null> {
@@ -17,18 +25,32 @@ export async function getClient(id: number): Promise<Client | null> {
 }
 
 export async function createClient(data: Omit<Client, 'id' | 'created_at'>): Promise<number> {
-  const { data: row } = await supabase.from('clients').insert(data).select('id').single();
+  const { data: row, error } = await supabase.from('clients').insert(data).select('id').single();
+  if (error) throw error;
+  cacheInvalidate('clients');
   return (row as any).id;
 }
 
 export async function updateClient(id: number, data: Omit<Client, 'id' | 'created_at'>) {
   await supabase.from('clients').update(data).eq('id', id);
+  cacheInvalidate('clients', `client-${id}`);
+}
+
+export async function deleteClient(id: number) {
+  const { error } = await supabase.from('clients').delete().eq('id', id);
+  if (error) throw new Error(`Error al eliminar cliente: ${error.message}`);
+  cacheInvalidate('clients', `client-${id}`);
+  cacheInvalidatePrefix(`sales-client-${id}`);
 }
 
 // --- PRODUCTS ---
 export async function getProducts(): Promise<Product[]> {
+  const cached = cacheGet<Product[]>('products', TTL_LONG);
+  if (cached) return cached;
   const { data } = await supabase.from('products').select('*').order('name');
-  return (data ?? []) as Product[];
+  const result = (data ?? []) as Product[];
+  cacheSet('products', result);
+  return result;
 }
 
 export async function getProduct(id: number): Promise<Product | null> {
@@ -37,12 +59,21 @@ export async function getProduct(id: number): Promise<Product | null> {
 }
 
 export async function createProduct(data: Omit<Product, 'id' | 'created_at'>): Promise<number> {
-  const { data: row } = await supabase.from('products').insert(data).select('id').single();
+  const { data: row, error } = await supabase.from('products').insert(data).select('id').single();
+  if (error) throw error;
+  cacheInvalidate('products');
   return (row as any).id;
 }
 
 export async function updateProduct(id: number, data: Partial<Omit<Product, 'id' | 'created_at'>>) {
   await supabase.from('products').update(data).eq('id', id);
+  cacheInvalidate('products', `product-${id}`);
+}
+
+export async function deleteProduct(id: number) {
+  const { error } = await supabase.from('products').delete().eq('id', id);
+  if (error) throw new Error(`Error al eliminar producto: ${error.message}`);
+  cacheInvalidate('products', `product-${id}`);
 }
 
 export async function adjustStock(productId: number, delta: number) {
@@ -51,12 +82,17 @@ export async function adjustStock(productId: number, delta: number) {
 
 // --- SALES ---
 export async function getSalesByClient(clientId: number): Promise<Sale[]> {
+  const key = `sales-client-${clientId}`;
+  const cached = cacheGet<Sale[]>(key, TTL_SHORT);
+  if (cached) return cached;
   const { data } = await supabase
     .from('sales')
     .select('*')
     .eq('client_id', clientId)
     .order('created_at', { ascending: false });
-  return (data ?? []) as Sale[];
+  const result = (data ?? []) as Sale[];
+  cacheSet(key, result);
+  return result;
 }
 
 export async function getSale(id: number): Promise<Sale | null> {
@@ -70,29 +106,116 @@ export async function getSale(id: number): Promise<Sale | null> {
   return { ...row, client_name: row.clients?.name } as Sale;
 }
 
+export async function getSaleItems(saleId: number): Promise<SaleItem[]> {
+  const { data } = await supabase
+    .from('sale_items')
+    .select('*')
+    .eq('sale_id', saleId)
+    .order('id');
+  return (data ?? []) as SaleItem[];
+}
+
 export async function createSale(
-  data: Omit<Sale, 'id' | 'created_at' | 'client_name'>
+  data: Omit<Sale, 'id' | 'created_at' | 'client_name' | 'items'>,
+  items: { product_id: number | null; product_name: string; quantity: number; unit_price: number }[]
 ): Promise<number> {
-  const { product_id, ...rest } = data;
-  const payload = { ...rest, product_id: product_id ?? null };
-  const { data: row } = await supabase.from('sales').insert(payload).select('id').single();
-  // decrement stock if product linked
-  if (product_id) {
-    await supabase
-      .from('products')
-      .select('stock')
-      .eq('id', product_id)
-      .single()
-      .then(async ({ data: p }) => {
-        if (p) {
-          await supabase
-            .from('products')
-            .update({ stock: Math.max(0, (p as any).stock - 1) })
-            .eq('id', product_id);
-        }
-      });
+  const payload = {
+    ...data,
+    delivery_date: data.delivery_date?.trim() || null,
+    start_date: data.start_date?.trim() || new Date().toISOString().split('T')[0],
+    notes: data.notes ?? '',
+  };
+
+  const { data: row, error } = await supabase.from('sales').insert(payload).select('id').single();
+  if (error) throw new Error(`Error al guardar la venta: ${error.message}`);
+  const saleId = (row as any).id;
+
+  if (items.length > 0) {
+    const { error: itemsError } = await supabase
+      .from('sale_items')
+      .insert(items.map(it => ({ ...it, sale_id: saleId })));
+    if (itemsError) throw new Error(`Error al guardar los productos: ${itemsError.message}`);
+
+    for (const it of items) {
+      if (it.product_id) {
+        await supabase.rpc('adjust_stock', { product_id: it.product_id, delta: -it.quantity });
+      }
+    }
   }
-  return (row as any).id;
+
+  cacheInvalidatePrefix(`sales-client-${data.client_id}`);
+  cacheInvalidate('products');
+  return saleId;
+}
+
+export async function updateSale(id: number, data: { notes?: string; payment_day?: number; installment_amount?: number }) {
+  const { error } = await supabase.from('sales').update(data).eq('id', id);
+  if (error) throw new Error(`Error al actualizar venta: ${error.message}`);
+}
+
+export async function deleteSale(id: number) {
+  const { error } = await supabase.from('sales').delete().eq('id', id);
+  if (error) throw new Error(`Error al eliminar venta: ${error.message}`);
+  cacheInvalidatePrefix('sales-client-');
+}
+
+// --- ADVANCE PAYMENTS ---
+export async function getClientPayments(clientId: number): Promise<ClientPayment[]> {
+  const { data } = await supabase
+    .from('client_payments')
+    .select('*')
+    .eq('client_id', clientId)
+    .order('date', { ascending: false });
+  return (data ?? []) as ClientPayment[];
+}
+
+export async function getClientPendingDebt(clientId: number): Promise<number> {
+  const { data: sales } = await supabase.from('sales').select('id').eq('client_id', clientId);
+  const saleIds = (sales ?? []).map((s: any) => s.id);
+  if (saleIds.length === 0) return 0;
+  const { data } = await supabase
+    .from('installments')
+    .select('expected_amount, paid_amount')
+    .in('sale_id', saleIds)
+    .in('status', ['pending', 'partial', 'overdue']);
+  return ((data ?? []) as any[]).reduce((acc, i) => acc + (i.expected_amount - i.paid_amount), 0);
+}
+
+export async function registerAdvancePayment(
+  clientId: number,
+  amount: number,
+  date: string,
+  notes: string
+) {
+  const { error } = await supabase.from('client_payments').insert({
+    client_id: clientId, amount, date, notes,
+  });
+  if (error) throw new Error(`Error al registrar pago: ${error.message}`);
+
+  const { data: sales } = await supabase.from('sales').select('id').eq('client_id', clientId);
+  const saleIds = (sales ?? []).map((s: any) => s.id);
+  if (saleIds.length === 0) return;
+
+  const { data: installments } = await supabase
+    .from('installments')
+    .select('id, expected_amount, paid_amount')
+    .in('sale_id', saleIds)
+    .in('status', ['pending', 'partial', 'overdue'])
+    .order('due_date');
+
+  let remaining = amount;
+  for (const inst of (installments ?? []) as any[]) {
+    if (remaining <= 0) break;
+    const stillOwed = inst.expected_amount - inst.paid_amount;
+    const applying = Math.min(remaining, stillOwed);
+    const newPaid = inst.paid_amount + applying;
+    const newStatus = newPaid >= inst.expected_amount ? 'paid' : 'partial';
+    await supabase
+      .from('installments')
+      .update({ paid_amount: newPaid, paid_date: date, status: newStatus })
+      .eq('id', inst.id);
+    remaining -= applying;
+  }
 }
 
 // --- INSTALLMENTS ---
@@ -106,7 +229,8 @@ export async function getInstallmentsBySale(saleId: number): Promise<Installment
 }
 
 export async function createInstallments(installments: Omit<Installment, 'id'>[]) {
-  await supabase.from('installments').insert(installments);
+  const { error } = await supabase.from('installments').insert(installments);
+  if (error) throw new Error(`Error al crear cuotas: ${error.message}`);
 }
 
 export async function registerPayment(
@@ -127,10 +251,42 @@ export async function registerPayment(
   else if (paidAmount >= (inst as any).expected_amount) status = 'paid';
   else status = 'partial';
 
-  await supabase
+  const { error } = await supabase
     .from('installments')
     .update({ paid_amount: paidAmount, paid_date: paidDate || null, status, notes })
     .eq('id', installmentId);
+  if (error) throw new Error(`Error al registrar pago: ${error.message}`);
+}
+
+// --- CLIENT EXPORT ---
+export async function getClientDataForExport(clientId: number) {
+  const [clientRes, salesRes, paymentsRes] = await Promise.all([
+    supabase.from('clients').select('*').eq('id', clientId).single(),
+    supabase.from('sales').select('*').eq('client_id', clientId).order('created_at', { ascending: false }),
+    supabase.from('client_payments').select('*').eq('client_id', clientId).order('date', { ascending: false }),
+  ]);
+
+  const saleIds = ((salesRes.data ?? []) as any[]).map((s) => s.id);
+  let installments: any[] = [];
+  if (saleIds.length > 0) {
+    const { data } = await supabase
+      .from('installments')
+      .select('*, sales(product_name)')
+      .in('sale_id', saleIds)
+      .order('due_date');
+    installments = (data ?? []).map((i: any) => ({
+      ...i,
+      product_name: i.sales?.product_name ?? '',
+      sales: undefined,
+    }));
+  }
+
+  return {
+    client: clientRes.data,
+    sales: salesRes.data ?? [],
+    installments,
+    payments: paymentsRes.data ?? [],
+  };
 }
 
 // --- DASHBOARD ---
@@ -166,29 +322,14 @@ export async function getDashboardStats() {
 
   const [clientsRes, overdueRes, todayRes, collectedRes, lowStockRes] = await Promise.all([
     supabase.from('clients').select('id', { count: 'exact', head: true }),
-    supabase
-      .from('installments')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'overdue'),
-    supabase
-      .from('installments')
-      .select('id', { count: 'exact', head: true })
-      .eq('due_date', today)
-      .in('status', ['pending', 'partial', 'overdue']),
-    supabase
-      .from('installments')
-      .select('paid_amount')
-      .like('paid_date', `${thisMonth}%`),
-    supabase
-      .from('products')
-      .select('id', { count: 'exact', head: true })
-      .gt('min_stock', 0)
-      .filter('stock', 'lte', 'min_stock'),
+    supabase.from('installments').select('id', { count: 'exact', head: true }).eq('status', 'overdue'),
+    supabase.from('installments').select('id', { count: 'exact', head: true }).eq('due_date', today).in('status', ['pending', 'partial', 'overdue']),
+    supabase.from('installments').select('paid_amount').like('paid_date', `${thisMonth}%`),
+    supabase.from('products').select('id', { count: 'exact', head: true }).gt('min_stock', 0).filter('stock', 'lte', 'min_stock'),
   ]);
 
   const monthlyCollected = ((collectedRes.data ?? []) as any[]).reduce(
-    (acc, r) => acc + (r.paid_amount ?? 0),
-    0
+    (acc, r) => acc + (r.paid_amount ?? 0), 0
   );
 
   return {
@@ -197,5 +338,122 @@ export async function getDashboardStats() {
     todayCount: todayRes.count ?? 0,
     monthlyCollected,
     lowStockCount: lowStockRes.count ?? 0,
+  };
+}
+
+export async function getOverallStats() {
+  const [salesRes, installmentsRes, pendingRes] = await Promise.all([
+    supabase.from('sales').select('total_amount, advance_payment'),
+    supabase.from('installments').select('paid_amount').eq('status', 'paid'),
+    supabase.from('installments').select('expected_amount, paid_amount').in('status', ['pending', 'partial', 'overdue']),
+  ]);
+
+  const totalSold = ((salesRes.data ?? []) as any[]).reduce((acc, s) => acc + s.total_amount, 0);
+  const totalCollected = ((installmentsRes.data ?? []) as any[]).reduce((acc, i) => acc + i.paid_amount, 0);
+  const totalPending = ((pendingRes.data ?? []) as any[]).reduce(
+    (acc, i) => acc + (i.expected_amount - i.paid_amount), 0
+  );
+  return { totalSold, totalCollected, totalPending };
+}
+
+export async function getMonthlyStats(): Promise<{ month: string; collected: number }[]> {
+  const now = new Date();
+  const fromDate = new Date(now.getFullYear(), now.getMonth() - 11, 1).toISOString().split('T')[0];
+
+  const { data } = await supabase
+    .from('installments')
+    .select('paid_date, paid_amount')
+    .gte('paid_date', fromDate)
+    .not('paid_date', 'is', null);
+
+  const byMonth: Record<string, number> = {};
+  for (const row of (data ?? []) as any[]) {
+    if (!row.paid_date) continue;
+    const month = row.paid_date.substring(0, 7);
+    byMonth[month] = (byMonth[month] ?? 0) + (row.paid_amount ?? 0);
+  }
+
+  const results: { month: string; collected: number }[] = [];
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const month = d.toISOString().substring(0, 7);
+    results.push({ month, collected: byMonth[month] ?? 0 });
+  }
+  return results;
+}
+
+// --- ZONES / ROUTES ---
+export async function getTodayPendingByZone(): Promise<
+  { zone: string; clients: { client_id: number; client_name: string; address: string; phone: string; installment_id: number; expected_amount: number; paid_amount: number; due_date: string; status: string; sale_id: number }[] }[]
+> {
+  const today = new Date().toISOString().split('T')[0];
+  const { data } = await supabase
+    .from('installments')
+    .select('id, expected_amount, paid_amount, due_date, status, sale_id, sales(client_id, clients(name, address, phone, zone))')
+    .lte('due_date', today)
+    .in('status', ['pending', 'partial', 'overdue'])
+    .order('due_date');
+
+  const byZone: Record<string, any[]> = {};
+  for (const inst of (data ?? []) as any[]) {
+    const client = inst.sales?.clients;
+    if (!client) continue;
+    const zone = client.zone?.trim() || 'Sin zona';
+    if (!byZone[zone]) byZone[zone] = [];
+    byZone[zone].push({
+      client_id: inst.sales.client_id,
+      client_name: client.name,
+      address: client.address,
+      phone: client.phone,
+      installment_id: inst.id,
+      sale_id: inst.sale_id,
+      expected_amount: inst.expected_amount,
+      paid_amount: inst.paid_amount,
+      due_date: inst.due_date,
+      status: inst.status,
+    });
+  }
+  return Object.entries(byZone)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([zone, clients]) => ({ zone, clients }));
+}
+
+export async function getClientsByZone(): Promise<{ zone: string; clients: Client[] }[]> {
+  const { data } = await supabase.from('clients').select('*').order('name');
+  const clients = (data ?? []) as Client[];
+  const byZone: Record<string, Client[]> = {};
+  for (const c of clients) {
+    const zone = c.zone?.trim() || 'Sin zona';
+    if (!byZone[zone]) byZone[zone] = [];
+    byZone[zone].push(c);
+  }
+  return Object.entries(byZone)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([zone, clients]) => ({ zone, clients }));
+}
+
+// --- EXPORT ---
+export async function exportAllData() {
+  const [clients, products, sales, saleItems, installments] = await Promise.all([
+    supabase.from('clients').select('*').order('name'),
+    supabase.from('products').select('*').order('name'),
+    supabase.from('sales').select('*').order('created_at', { ascending: false }),
+    supabase.from('sale_items').select('*').order('sale_id'),
+    supabase.from('installments').select('*, sales(product_name, clients(name))').order('due_date'),
+  ]);
+
+  return {
+    exported_at: new Date().toISOString(),
+    app: 'Clientes y Stock',
+    clients: clients.data ?? [],
+    products: products.data ?? [],
+    sales: sales.data ?? [],
+    sale_items: saleItems.data ?? [],
+    installments: ((installments.data ?? []) as any[]).map(i => ({
+      ...i,
+      client_name: i.sales?.clients?.name ?? '',
+      product_name: i.sales?.product_name ?? '',
+      sales: undefined,
+    })),
   };
 }

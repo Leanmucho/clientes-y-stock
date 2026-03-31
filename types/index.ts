@@ -5,6 +5,7 @@ export interface Client {
   phone: string;
   address: string;
   reference: string;
+  zone: string;
   created_at: string;
 }
 
@@ -15,14 +16,23 @@ export interface Product {
   price: number;
   stock: number;
   min_stock: number;
+  image_url: string;
   created_at: string;
+}
+
+export interface SaleItem {
+  id: number;
+  sale_id: number;
+  product_id: number | null;
+  product_name: string;
+  quantity: number;
+  unit_price: number;
 }
 
 export interface Sale {
   id: number;
   client_id: number;
   client_name?: string;
-  product_id?: number | null;
   product_name: string;
   total_amount: number;
   advance_payment: number;
@@ -31,6 +41,17 @@ export interface Sale {
   payment_day: number;
   start_date: string;
   delivery_date: string;
+  notes: string;
+  created_at: string;
+  items?: SaleItem[];
+}
+
+export interface ClientPayment {
+  id: number;
+  client_id: number;
+  amount: number;
+  date: string;
+  notes: string;
   created_at: string;
 }
 

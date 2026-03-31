@@ -11,6 +11,7 @@ export default function NewClientScreen() {
   const [dni, setDni] = useState('');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
+  const [zone, setZone] = useState('');
   const [reference, setReference] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -18,7 +19,7 @@ export default function NewClientScreen() {
     if (!name.trim()) return Alert.alert('Requerido', 'El nombre del cliente es obligatorio.');
     setSaving(true);
     try {
-      await createClient({ name: name.trim(), dni, phone, address, reference });
+      await createClient({ name: name.trim(), dni, phone, address, zone, reference });
       router.back();
     } catch {
       Alert.alert('Error', 'No se pudo guardar el cliente.');
@@ -33,9 +34,10 @@ export default function NewClientScreen() {
         <Field icon="person" label="Nombre y Apellido *" value={name} onChangeText={setName} placeholder="Ej: Sandra Noemi Alegre" autoCapitalize="words" />
         <Field icon="card" label="DNI" value={dni} onChangeText={setDni} placeholder="Ej: 33953133" keyboardType="numeric" />
 
-        <Text style={[styles.sectionLabel, { marginTop: 20 }]}>CONTACTO</Text>
+        <Text style={[styles.sectionLabel, { marginTop: 20 }]}>CONTACTO Y UBICACIÓN</Text>
         <Field icon="call" label="Celular" value={phone} onChangeText={setPhone} placeholder="Ej: 1123392390" keyboardType="phone-pad" />
         <Field icon="home" label="Domicilio" value={address} onChangeText={setAddress} placeholder="Ej: Gral Rodriguez 123" autoCapitalize="words" />
+        <Field icon="location" label="Zona / Barrio" value={zone} onChangeText={setZone} placeholder="Ej: Centro, Villa del Parque..." autoCapitalize="words" />
         <Field icon="people" label="Referencia / Cómo nos conoció" value={reference} onChangeText={setReference} placeholder="Ej: Mujer de Mario" autoCapitalize="words" />
 
         <TouchableOpacity style={[styles.saveButton, saving && { opacity: 0.6 }]} onPress={handleSave} disabled={saving} activeOpacity={0.8}>

@@ -1,33 +1,45 @@
 import { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, KeyboardAvoidingView, Platform, RefreshControl } from 'react-native';
+import {
+  View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
+  Alert, KeyboardAvoidingView, Platform, RefreshControl, Image, ActivityIndicator, Modal,
+} from 'react-native';
 import { useFocusEffect, useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getProduct, updateProduct } from '../../lib/database';
+import * as ImagePicker from 'expo-image-picker';
+import { getProduct, updateProduct, deleteProduct } from '../../lib/database';
+import { uploadProductImage } from '../../lib/storage';
 import { Product } from '../../types';
 import { colors } from '../../lib/colors';
-import { formatCurrency } from '../../lib/utils';
+import { formatCurrency, formatInputNumber } from '../../lib/utils';
 import { Loading } from '../../components/Loading';
 
 export default function ProductDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const router = useRouter();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [editing, setEditing] = useState(false);
 
-  // edit fields
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState('');
   const [minStock, setMinStock] = useState('');
   const [stockDelta, setStockDelta] = useState('');
+  const [imageUri, setImageUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     const p = await getProduct(Number(id));
     setProduct(p);
-    if (p) { setName(p.name); setDescription(p.description); setPrice(p.price.toString()); setMinStock(p.min_stock.toString()); }
+    if (p) {
+      setName(p.name);
+      setDescription(p.description);
+      setPrice(p.price.toString());
+      setMinStock(p.min_stock.toString());
+      setImageUri(null);
+    }
     setLoading(false);
   }, [id]);
 
@@ -37,32 +49,49 @@ export default function ProductDetailScreen() {
     getProduct(Number(id)).then((p) => {
       if (!active) return;
       setProduct(p);
-      if (p) { setName(p.name); setDescription(p.description); setPrice(p.price.toString()); setMinStock(p.min_stock.toString()); }
+      if (p) {
+        setName(p.name); setDescription(p.description);
+        setPrice(p.price.toString()); setMinStock(p.min_stock.toString());
+        setImageUri(null);
+      }
       setLoading(false);
     });
     return () => { active = false; };
   }, [id]));
 
   const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await load();
-    setRefreshing(false);
+    setRefreshing(true); await load(); setRefreshing(false);
   }, [load]);
+
+  const pickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') return Alert.alert('Permiso requerido', 'Se necesita acceso a la galería.');
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true, aspect: [1, 1], quality: 0.7,
+    });
+    if (!result.canceled) setImageUri(result.assets[0].uri);
+  };
 
   const handleSave = async () => {
     if (!name.trim()) return Alert.alert('Requerido', 'El nombre es obligatorio.');
     setSaving(true);
     try {
+      let image_url = product?.image_url ?? '';
+      if (imageUri) {
+        image_url = await uploadProductImage(imageUri);
+      }
       await updateProduct(Number(id), {
         name: name.trim(),
         description: description.trim(),
         price: parseFloat(price) || 0,
         min_stock: parseInt(minStock) || 5,
+        image_url,
       });
       await load();
       setEditing(false);
-    } catch {
-      Alert.alert('Error', 'No se pudo guardar.');
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'No se pudo guardar.');
     } finally {
       setSaving(false);
     }
@@ -82,11 +111,27 @@ export default function ProductDetailScreen() {
     await handleAdjustStock(delta);
   };
 
+  const handleDelete = () => setConfirmDelete(true);
+
+  const confirmDoDelete = async () => {
+    setDeleting(true);
+    try {
+      await deleteProduct(Number(id));
+      setConfirmDelete(false);
+      router.replace('/stock');
+    } catch (e: any) {
+      setDeleting(false);
+      setConfirmDelete(false);
+      Alert.alert('Error', e?.message ?? 'No se pudo eliminar.');
+    }
+  };
+
   if (loading) return <Loading />;
   if (!product) return <View style={styles.center}><Text style={{ color: colors.textMuted }}>Producto no encontrado</Text></View>;
 
   const isLow = product.stock <= product.min_stock;
   const isEmpty = product.stock === 0;
+  const displayImage = imageUri ?? (product.image_url || null);
 
   return (
     <>
@@ -102,6 +147,27 @@ export default function ProductDetailScreen() {
         <ScrollView style={styles.container} contentContainerStyle={styles.content}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}>
 
+          {/* Product image */}
+          <TouchableOpacity
+            style={styles.imageContainer}
+            onPress={editing ? pickImage : undefined}
+            activeOpacity={editing ? 0.7 : 1}
+          >
+            {displayImage ? (
+              <Image source={{ uri: displayImage }} style={styles.productImage} />
+            ) : (
+              <View style={styles.imagePlaceholder}>
+                <Ionicons name="cube-outline" size={40} color={colors.textDim} />
+              </View>
+            )}
+            {editing && (
+              <View style={styles.imageEditBadge}>
+                <Ionicons name="camera" size={16} color={colors.white} />
+                <Text style={styles.imageEditText}>Cambiar foto</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
           {/* Stock card */}
           <View style={[styles.stockCard, isEmpty && { borderColor: colors.danger }, isLow && !isEmpty && { borderColor: colors.warning }]}>
             <Text style={[styles.stockNum, { color: isEmpty ? colors.danger : isLow ? colors.warning : colors.success }]}>
@@ -109,35 +175,39 @@ export default function ProductDetailScreen() {
             </Text>
             <Text style={styles.stockLabel}>unidades en stock</Text>
             <Text style={styles.priceLabel}>{formatCurrency(product.price)} por unidad</Text>
-            {isLow && <View style={[styles.alertBadge, { backgroundColor: isEmpty ? colors.danger : colors.warning }]}>
-              <Ionicons name="warning" size={12} color={colors.white} />
-              <Text style={styles.alertText}>{isEmpty ? 'Sin stock' : 'Stock bajo'}</Text>
-            </View>}
+            {isLow && (
+              <View style={[styles.alertBadge, { backgroundColor: isEmpty ? colors.danger : colors.warning }]}>
+                <Ionicons name="warning" size={12} color={colors.white} />
+                <Text style={styles.alertText}>{isEmpty ? 'Sin stock' : 'Stock bajo'}</Text>
+              </View>
+            )}
           </View>
 
           {/* Adjust stock */}
-          <View style={styles.adjustCard}>
-            <Text style={styles.adjustTitle}>Ajustar stock</Text>
-            <View style={styles.adjustRow}>
-              <TouchableOpacity style={styles.adjustBtn} onPress={() => handleAdjustStock(-1)}>
-                <Ionicons name="remove" size={22} color={colors.danger} />
-              </TouchableOpacity>
-              <TextInput
-                style={styles.adjustInput}
-                value={stockDelta}
-                onChangeText={setStockDelta}
-                placeholder="+/- cantidad"
-                placeholderTextColor={colors.textDim}
-                keyboardType="numeric"
-              />
-              <TouchableOpacity style={styles.adjustBtn} onPress={() => handleAdjustStock(1)}>
-                <Ionicons name="add" size={22} color={colors.success} />
+          {!editing && (
+            <View style={styles.adjustCard}>
+              <Text style={styles.adjustTitle}>Ajustar stock</Text>
+              <View style={styles.adjustRow}>
+                <TouchableOpacity style={styles.adjustBtn} onPress={() => handleAdjustStock(-1)}>
+                  <Ionicons name="remove" size={22} color={colors.danger} />
+                </TouchableOpacity>
+                <TextInput
+                  style={styles.adjustInput}
+                  value={stockDelta}
+                  onChangeText={setStockDelta}
+                  placeholder="+/- cantidad"
+                  placeholderTextColor={colors.textDim}
+                  keyboardType="numeric"
+                />
+                <TouchableOpacity style={styles.adjustBtn} onPress={() => handleAdjustStock(1)}>
+                  <Ionicons name="add" size={22} color={colors.success} />
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity style={styles.applyBtn} onPress={handleManualStock}>
+                <Text style={styles.applyBtnText}>Aplicar ajuste</Text>
               </TouchableOpacity>
             </View>
-            <TouchableOpacity style={styles.applyBtn} onPress={handleManualStock}>
-              <Text style={styles.applyBtnText}>Aplicar ajuste</Text>
-            </TouchableOpacity>
-          </View>
+          )}
 
           {/* Edit form */}
           {editing && (
@@ -145,14 +215,23 @@ export default function ProductDetailScreen() {
               <Text style={styles.editTitle}>Editar producto</Text>
               <EditField label="Nombre" value={name} onChangeText={setName} autoCapitalize="words" />
               <EditField label="Descripción" value={description} onChangeText={setDescription} autoCapitalize="sentences" />
-              <EditField label="Precio" value={price} onChangeText={setPrice} keyboardType="numeric" prefix="$" />
+              <EditField
+                label="Precio"
+                value={formatInputNumber(price)}
+                onChangeText={(v: string) => setPrice(v.replace(/\D/g, ''))}
+                keyboardType="numeric"
+                prefix="$"
+              />
               <EditField label="Stock mínimo (alerta)" value={minStock} onChangeText={setMinStock} keyboardType="numeric" />
               <TouchableOpacity
                 style={[styles.saveButton, saving && { opacity: 0.6 }]}
                 onPress={handleSave}
                 disabled={saving}
               >
-                <Text style={styles.saveButtonText}>{saving ? 'Guardando...' : 'Guardar cambios'}</Text>
+                {saving
+                  ? <ActivityIndicator color={colors.white} size="small" />
+                  : <Text style={styles.saveButtonText}>Guardar cambios</Text>
+                }
               </TouchableOpacity>
             </View>
           )}
@@ -165,8 +244,48 @@ export default function ProductDetailScreen() {
               <InfoRow label="Stock mínimo" value={`${product.min_stock} unidades`} />
             </View>
           )}
+
+          {/* Delete button */}
+          {!editing && (
+            <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} activeOpacity={0.8}>
+              <Ionicons name="trash-outline" size={16} color={colors.danger} />
+              <Text style={styles.deleteBtnText}>Eliminar producto</Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Confirm delete modal */}
+      <Modal visible={confirmDelete} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <View style={styles.modalIconWrap}>
+                <Ionicons name="trash" size={24} color={colors.danger} />
+              </View>
+              <Text style={styles.modalTitle}>Eliminar producto</Text>
+              <Text style={styles.modalMsg}>
+                ¿Eliminar <Text style={{ fontWeight: '700', color: colors.text }}>{product.name}</Text>?{'\n'}Esta acción no se puede deshacer.
+              </Text>
+            </View>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity style={styles.modalCancel} onPress={() => setConfirmDelete(false)} disabled={deleting}>
+                <Text style={styles.modalCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalConfirm, deleting && { opacity: 0.6 }]}
+                onPress={confirmDoDelete}
+                disabled={deleting}
+              >
+                {deleting
+                  ? <ActivityIndicator color={colors.white} size="small" />
+                  : <><Ionicons name="trash" size={15} color={colors.white} /><Text style={styles.modalConfirmText}>Eliminar</Text></>
+                }
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }
@@ -198,6 +317,19 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 40 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bg },
+  imageContainer: { alignItems: 'center', marginBottom: 16 },
+  productImage: { width: 140, height: 140, borderRadius: 20, backgroundColor: colors.surface },
+  imagePlaceholder: {
+    width: 140, height: 140, borderRadius: 20,
+    backgroundColor: colors.surface, justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: colors.border,
+  },
+  imageEditBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: colors.primary, borderRadius: 20,
+    paddingHorizontal: 14, paddingVertical: 7, marginTop: 8,
+  },
+  imageEditText: { color: colors.white, fontWeight: '600', fontSize: 13 },
   stockCard: {
     backgroundColor: colors.surface, borderRadius: 16, padding: 24,
     alignItems: 'center', marginBottom: 12, borderWidth: 2, borderColor: colors.border,
@@ -213,19 +345,12 @@ const styles = StyleSheet.create({
   adjustCard: { backgroundColor: colors.surface, borderRadius: 14, padding: 16, marginBottom: 12 },
   adjustTitle: { fontSize: 14, fontWeight: '700', color: colors.text, marginBottom: 12 },
   adjustRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
-  adjustBtn: {
-    width: 44, height: 44, borderRadius: 12, backgroundColor: colors.bg,
-    justifyContent: 'center', alignItems: 'center',
-  },
+  adjustBtn: { width: 44, height: 44, borderRadius: 12, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' },
   adjustInput: {
-    flex: 1, backgroundColor: colors.bg, borderRadius: 10,
-    padding: 10, color: colors.text, fontSize: 15, textAlign: 'center',
-    borderWidth: 1, borderColor: colors.border,
+    flex: 1, backgroundColor: colors.bg, borderRadius: 10, padding: 10,
+    color: colors.text, fontSize: 15, textAlign: 'center', borderWidth: 1, borderColor: colors.border,
   },
-  applyBtn: {
-    backgroundColor: colors.primary, borderRadius: 10,
-    padding: 12, alignItems: 'center',
-  },
+  applyBtn: { backgroundColor: colors.primary, borderRadius: 10, padding: 12, alignItems: 'center' },
   applyBtnText: { color: colors.white, fontWeight: '700', fontSize: 14 },
   editCard: { backgroundColor: colors.surface, borderRadius: 14, padding: 16, marginBottom: 12 },
   editTitle: { fontSize: 14, fontWeight: '700', color: colors.text, marginBottom: 12 },
@@ -233,8 +358,7 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: 12, color: colors.textMuted, fontWeight: '600', marginBottom: 5, marginLeft: 2 },
   inputWrapper: {
     backgroundColor: colors.bg, borderRadius: 10, flexDirection: 'row',
-    alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10,
-    borderWidth: 1, borderColor: colors.border,
+    alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderWidth: 1, borderColor: colors.border,
   },
   prefix: { color: colors.textMuted, marginRight: 4 },
   input: { flex: 1, color: colors.text, fontSize: 14 },
@@ -244,4 +368,20 @@ const styles = StyleSheet.create({
   infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border },
   infoLabel: { fontSize: 13, color: colors.textMuted },
   infoValue: { fontSize: 13, fontWeight: '600', color: colors.text },
+  deleteBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginTop: 20, padding: 14, borderRadius: 12,
+    backgroundColor: colors.danger + '15', borderWidth: 1, borderColor: colors.danger + '33',
+  },
+  deleteBtnText: { color: colors.danger, fontWeight: '700', fontSize: 14 },
+  modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#00000077', padding: 24 },
+  modalBox: { backgroundColor: colors.surface, borderRadius: 20, padding: 24, width: '100%' },
+  modalIconWrap: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.danger + '22', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+  modalTitle: { fontSize: 17, fontWeight: '800', color: colors.text, marginBottom: 6, textAlign: 'center' },
+  modalMsg: { fontSize: 14, color: colors.textMuted, textAlign: 'center', lineHeight: 20 },
+  modalButtons: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  modalCancel: { flex: 1, backgroundColor: colors.bg, borderRadius: 12, padding: 14, alignItems: 'center' },
+  modalCancelText: { color: colors.textMuted, fontWeight: '700' },
+  modalConfirm: { flex: 1, backgroundColor: colors.danger, borderRadius: 12, padding: 14, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6 },
+  modalConfirmText: { color: colors.white, fontWeight: '700', fontSize: 14 },
 });

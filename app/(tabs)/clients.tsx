@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, RefreshControl } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { getClients } from '../../lib/database';
 import { Client } from '../../types';
@@ -16,8 +16,8 @@ export default function ClientsScreen() {
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    setLoading(true);
     getClients().then((data) => { if (active) { setClients(data); setLoading(false); } });
+    setLoading(false);
     return () => { active = false; };
   }, []));
 
@@ -36,6 +36,14 @@ export default function ClientsScreen() {
   );
 
   return (
+    <>
+    <Stack.Screen options={{
+      headerRight: () => (
+        <TouchableOpacity onPress={() => router.push('/zones')} style={{ marginRight: 8 }}>
+          <Ionicons name="navigate-outline" size={22} color={colors.primary} />
+        </TouchableOpacity>
+      ),
+    }} />
     <View style={styles.container}>
       <View style={styles.searchContainer}>
         <Ionicons name="search" size={18} color={colors.textDim} />
@@ -87,6 +95,7 @@ export default function ClientsScreen() {
         <Ionicons name="add" size={28} color={colors.white} />
       </TouchableOpacity>
     </View>
+    </>
   );
 }
 

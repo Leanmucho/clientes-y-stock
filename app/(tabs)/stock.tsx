@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, TextInput } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, TextInput, Image } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { getProducts } from '../../lib/database';
@@ -23,8 +23,8 @@ export default function StockScreen() {
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    setLoading(true);
     getProducts().then((data) => { if (active) { setProducts(data); setLoading(false); } });
+    setLoading(false);
     return () => { active = false; };
   }, []));
 
@@ -79,14 +79,23 @@ export default function StockScreen() {
               onPress={() => router.push(`/product/${item.id}`)}
               activeOpacity={0.7}
             >
-              <View style={[styles.stockBadge, { backgroundColor: isEmpty ? colors.danger + '22' : isLow ? colors.warning + '22' : colors.success + '22' }]}>
-                <Text style={[styles.stockNum, { color: isEmpty ? colors.danger : isLow ? colors.warning : colors.success }]}>
-                  {item.stock}
-                </Text>
-                <Text style={[styles.stockLabel, { color: isEmpty ? colors.danger : isLow ? colors.warning : colors.textDim }]}>
-                  {isEmpty ? 'Sin stock' : isLow ? 'Poco' : 'uds'}
-                </Text>
-              </View>
+              {item.image_url ? (
+                <View style={styles.thumbContainer}>
+                  <Image source={{ uri: item.image_url }} style={styles.thumb} />
+                  <View style={[styles.thumbBadge, { backgroundColor: isEmpty ? colors.danger : isLow ? colors.warning : colors.success }]}>
+                    <Text style={styles.thumbBadgeText}>{item.stock}</Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={[styles.stockBadge, { backgroundColor: isEmpty ? colors.danger + '22' : isLow ? colors.warning + '22' : colors.success + '22' }]}>
+                  <Text style={[styles.stockNum, { color: isEmpty ? colors.danger : isLow ? colors.warning : colors.success }]}>
+                    {item.stock}
+                  </Text>
+                  <Text style={[styles.stockLabel, { color: isEmpty ? colors.danger : isLow ? colors.warning : colors.textDim }]}>
+                    {isEmpty ? 'Sin stock' : isLow ? 'Poco' : 'uds'}
+                  </Text>
+                </View>
+              )}
               <View style={styles.cardInfo}>
                 <Text style={styles.productName}>{item.name}</Text>
                 {item.description ? <Text style={styles.productDesc} numberOfLines={1}>{item.description}</Text> : null}
@@ -135,6 +144,15 @@ const styles = StyleSheet.create({
   },
   stockNum: { fontSize: 20, fontWeight: '800' },
   stockLabel: { fontSize: 10, fontWeight: '600' },
+  thumbContainer: { width: 56, height: 56, position: 'relative' },
+  thumb: { width: 56, height: 56, borderRadius: 12 },
+  thumbBadge: {
+    position: 'absolute', bottom: -4, right: -4,
+    minWidth: 20, height: 20, borderRadius: 10,
+    justifyContent: 'center', alignItems: 'center',
+    paddingHorizontal: 4, borderWidth: 2, borderColor: colors.bg,
+  },
+  thumbBadgeText: { fontSize: 10, fontWeight: '800', color: colors.white },
   cardInfo: { flex: 1 },
   productName: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 2 },
   productDesc: { fontSize: 12, color: colors.textMuted, marginBottom: 4 },

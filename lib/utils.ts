@@ -1,5 +1,17 @@
+// Formats raw digit string for display inside inputs (no $ prefix)
+// e.g. "5000000" → "5.000.000"
+export function formatInputNumber(digits: string): string {
+  if (!digits) return '';
+  const num = parseInt(digits);
+  if (isNaN(num)) return '';
+  return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
 export function formatCurrency(amount: number): string {
-  return `$${amount.toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  const rounded = Math.round(amount);
+  // Argentine format: dot as thousands separator, no decimals ($50.000)
+  const withDots = rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return '$' + withDots;
 }
 
 export function formatDate(dateStr: string): string {
