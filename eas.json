@@ -5,7 +5,7 @@
   "build": {
     "preview": {
       "android": {
-        "buildType": "apk"
+        "gradleCommand": ":app:assembleDebug"
       },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://gnxycdniusjnvbmokgnx.supabase.co",
