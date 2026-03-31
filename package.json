@@ -18,7 +18,6 @@
     "expo-linking": "^55.0.9",
     "expo-router": "^55.0.8",
     "expo-sharing": "~55.0.14",
-    "expo-sqlite": "^55.0.11",
     "expo-status-bar": "^3.0.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",

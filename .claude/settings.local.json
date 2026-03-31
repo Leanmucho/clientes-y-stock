@@ -16,7 +16,8 @@
       "Bash(git init:*)",
       "Bash(/c/Users/leanm/Desktop/pla/.gitignore:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "WebFetch(domain:expo.dev)"
     ]
   }
 }
