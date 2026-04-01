@@ -6,7 +6,7 @@
     "preview": {
       "android": {
         "gradleCommand": ":app:assembleDebug",
-        "image": "ubuntu-22.04-jdk-17-ndk-r25c"
+        "image": "sdk-55"
       },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://gnxycdniusjnvbmokgnx.supabase.co",
