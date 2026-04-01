@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getDashboardStats, getTodayInstallments, getMonthlyStats } from '../../lib/database';
+import { getDashboardStats, getTodayInstallments, getMonthlyStats, getMonthlyExpenseStats } from '../../lib/database';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatDate, getStatusColor, getStatusLabel } from '../../lib/utils';
 import { Loading } from '../../components/Loading';
@@ -14,24 +14,24 @@ export default function DashboardScreen() {
   const [stats, setStats] = useState({ totalClients: 0, overdueCount: 0, todayCount: 0, monthlyCollected: 0, lowStockCount: 0 });
   const [pending, setPending] = useState<any[]>([]);
   const [monthly, setMonthly] = useState<{ month: string; collected: number }[]>([]);
+  const [monthlyExp, setMonthlyExp] = useState<{ month: string; amount: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<FilterStatus>('all');
   const [showMonthly, setShowMonthly] = useState(false);
 
   const load = useCallback(async () => {
-    const [s, p, m] = await Promise.all([getDashboardStats(), getTodayInstallments(), getMonthlyStats()]);
-    setStats(s); setPending(p); setMonthly(m); setLoading(false);
+    const [s, p, m, me] = await Promise.all([getDashboardStats(), getTodayInstallments(), getMonthlyStats(), getMonthlyExpenseStats()]);
+    setStats(s); setPending(p); setMonthly(m); setMonthlyExp(me); setLoading(false);
   }, []);
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    // Show stale data instantly, then refresh in background
-    Promise.all([getDashboardStats(), getTodayInstallments(), getMonthlyStats()]).then(([s, p, m]) => {
+    Promise.all([getDashboardStats(), getTodayInstallments(), getMonthlyStats(), getMonthlyExpenseStats()]).then(([s, p, m, me]) => {
       if (!active) return;
-      setStats(s); setPending(p); setMonthly(m); setLoading(false);
+      setStats(s); setPending(p); setMonthly(m); setMonthlyExp(me); setLoading(false);
     });
-    setLoading(false); // don't block render on refocus
+    setLoading(false);
     return () => { active = false; };
   }, []));
 
@@ -44,6 +44,9 @@ export default function DashboardScreen() {
   const filtered = filter === 'all' ? pending : pending.filter(i => i.status === filter);
 
   const maxMonthly = Math.max(...monthly.map(m => m.collected), 1);
+  const thisMonth = new Date().toISOString().substring(0, 7);
+  const monthlyExpTotal = monthlyExp.find(m => m.month === thisMonth)?.amount ?? 0;
+  const netThisMonth = stats.monthlyCollected - monthlyExpTotal;
 
   const FILTERS: { key: FilterStatus; label: string; color: string }[] = [
     { key: 'all', label: 'Todos', color: colors.primary },
@@ -63,22 +66,39 @@ export default function DashboardScreen() {
         <StatCard icon="alert-circle" label="Vencidas" value={stats.overdueCount.toString()} color={colors.danger} />
       </View>
 
-      {/* Monthly collected */}
-      <View style={styles.monthCard}>
-        <Ionicons name="trending-up" size={20} color={colors.success} />
-        <View style={{ flex: 1, marginLeft: 10 }}>
-          <Text style={styles.monthLabel}>Cobrado este mes</Text>
-          <Text style={styles.monthValue}>{formatCurrency(stats.monthlyCollected)}</Text>
-        </View>
-        <TouchableOpacity onPress={() => setShowMonthly(v => !v)} style={styles.monthToggle}>
-          <Ionicons name={showMonthly ? 'chevron-up' : 'bar-chart-outline'} size={18} color={colors.success} />
+      {/* P&L row */}
+      <View style={styles.plRow}>
+        <TouchableOpacity style={[styles.plCard, { borderLeftColor: colors.success }]} onPress={() => setShowMonthly(v => !v)} activeOpacity={0.8}>
+          <Text style={styles.plLabel}>Cobrado</Text>
+          <Text style={[styles.plValue, { color: colors.success }]}>{formatCurrency(stats.monthlyCollected)}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.plCard, { borderLeftColor: colors.danger }]} onPress={() => router.push('/gastos')} activeOpacity={0.8}>
+          <Text style={styles.plLabel}>Gastos</Text>
+          <Text style={[styles.plValue, { color: colors.danger }]}>{formatCurrency(monthlyExpTotal)}</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Net card */}
+      <TouchableOpacity style={[styles.netCard, { borderLeftColor: netThisMonth >= 0 ? colors.success : colors.danger }]} onPress={() => router.push('/reportes')} activeOpacity={0.8}>
+        <Ionicons name={netThisMonth >= 0 ? 'trending-up' : 'trending-down'} size={18} color={netThisMonth >= 0 ? colors.success : colors.danger} />
+        <View style={{ flex: 1, marginLeft: 10 }}>
+          <Text style={styles.netLabel}>Resultado neto este mes</Text>
+          <Text style={[styles.netValue, { color: netThisMonth >= 0 ? colors.success : colors.danger }]}>
+            {netThisMonth >= 0 ? '+' : ''}{formatCurrency(netThisMonth)}
+          </Text>
+        </View>
+        <Ionicons name="bar-chart-outline" size={16} color={colors.textDim} />
+      </TouchableOpacity>
 
       {/* Monthly chart */}
       {showMonthly && (
         <View style={styles.chartCard}>
-          <Text style={styles.chartTitle}>Cobrado por mes (últimos 12 meses)</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <Text style={styles.chartTitle}>Cobrado por mes (últimos 12 meses)</Text>
+            <TouchableOpacity onPress={() => setShowMonthly(false)}>
+              <Ionicons name="chevron-up" size={16} color={colors.textDim} />
+            </TouchableOpacity>
+          </View>
           <View style={styles.chartBars}>
             {monthly.map((m) => {
               const ratio = m.collected / maxMonthly;
@@ -185,12 +205,15 @@ const styles = StyleSheet.create({
   statCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 14, padding: 14, alignItems: 'center', gap: 4, borderTopWidth: 3 },
   statValue: { fontSize: 22, fontWeight: '800', color: colors.text },
   statLabel: { fontSize: 11, color: colors.textMuted, fontWeight: '500' },
-  monthCard: { backgroundColor: colors.surface, borderRadius: 14, padding: 16, flexDirection: 'row', alignItems: 'center', marginBottom: 12, borderLeftWidth: 3, borderLeftColor: colors.success },
-  monthLabel: { fontSize: 12, color: colors.textMuted, fontWeight: '500' },
-  monthValue: { fontSize: 22, fontWeight: '800', color: colors.success },
-  monthToggle: { padding: 4 },
+  plRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  plCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 14, padding: 14, borderLeftWidth: 3 },
+  plLabel: { fontSize: 11, color: colors.textMuted, fontWeight: '500', marginBottom: 4 },
+  plValue: { fontSize: 18, fontWeight: '800' },
+  netCard: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', marginBottom: 12, borderLeftWidth: 3 },
+  netLabel: { fontSize: 12, color: colors.textMuted, fontWeight: '500' },
+  netValue: { fontSize: 20, fontWeight: '800' },
   chartCard: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, marginBottom: 12 },
-  chartTitle: { fontSize: 12, fontWeight: '600', color: colors.textMuted, marginBottom: 12 },
+  chartTitle: { fontSize: 12, fontWeight: '600', color: colors.textMuted },
   chartBars: { flexDirection: 'row', alignItems: 'flex-end', height: 90, gap: 4 },
   barCol: { flex: 1, alignItems: 'center', height: 90, justifyContent: 'flex-end' },
   barAmount: { fontSize: 8, color: colors.textDim, marginBottom: 2 },

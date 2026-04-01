@@ -66,3 +66,38 @@ export interface Installment {
   status: 'pending' | 'partial' | 'paid' | 'overdue';
   notes: string;
 }
+
+export interface Expense {
+  id: number;
+  category: string;
+  description: string;
+  amount: number;
+  date: string;
+  supplier_id: number | null;
+  supplier_name?: string;
+  payment_method: string;
+  notes: string;
+  created_at: string;
+}
+
+export interface Supplier {
+  id: number;
+  name: string;
+  contact_name: string;
+  phone: string;
+  email: string;
+  address: string;
+  category: string;
+  notes: string;
+  created_at: string;
+}
+
+export interface TeamMember {
+  id: number;
+  name: string;
+  role: string;
+  phone: string;
+  commission_rate: number;
+  active: boolean;
+  created_at: string;
+}

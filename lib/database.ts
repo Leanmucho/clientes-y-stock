@@ -1,6 +1,9 @@
 import { supabase } from './supabase';
-import { Client, Sale, SaleItem, Installment, Product, ClientPayment } from '../types';
+import { Client, Sale, SaleItem, Installment, Product, ClientPayment, Expense, Supplier, TeamMember } from '../types';
 import { cacheGet, cacheSet, cacheInvalidate, cacheInvalidatePrefix } from './cache';
+
+export const EXPENSE_CATEGORIES = ['Alquiler', 'Servicios', 'Stock/Compras', 'Personal', 'Transporte', 'Marketing', 'Impuestos', 'Otro'];
+export const PAYMENT_METHODS = ['Efectivo', 'Transferencia', 'Tarjeta', 'Cheque'];
 
 const TTL_SHORT = 30_000;   // 30s — dashboard, cobros
 const TTL_LONG  = 120_000;  // 2min — clients, products lists
@@ -430,6 +433,174 @@ export async function getClientsByZone(): Promise<{ zone: string; clients: Clien
   return Object.entries(byZone)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([zone, clients]) => ({ zone, clients }));
+}
+
+// --- EXPENSES ---
+export async function getExpenses(): Promise<Expense[]> {
+  const { data } = await supabase
+    .from('expenses')
+    .select('*, suppliers(name)')
+    .order('date', { ascending: false });
+  return ((data ?? []) as any[]).map(e => ({
+    ...e,
+    supplier_name: e.suppliers?.name ?? null,
+    suppliers: undefined,
+  })) as Expense[];
+}
+
+export async function getExpensesByMonth(month: string): Promise<Expense[]> {
+  const { data } = await supabase
+    .from('expenses')
+    .select('*, suppliers(name)')
+    .like('date', `${month}%`)
+    .order('date', { ascending: false });
+  return ((data ?? []) as any[]).map(e => ({
+    ...e,
+    supplier_name: e.suppliers?.name ?? null,
+    suppliers: undefined,
+  })) as Expense[];
+}
+
+export async function createExpense(data: Omit<Expense, 'id' | 'created_at' | 'supplier_name'>): Promise<number> {
+  const { data: row, error } = await supabase.from('expenses').insert(data).select('id').single();
+  if (error) throw new Error(`Error al guardar gasto: ${error.message}`);
+  return (row as any).id;
+}
+
+export async function updateExpense(id: number, data: Partial<Omit<Expense, 'id' | 'created_at' | 'supplier_name'>>) {
+  const { error } = await supabase.from('expenses').update(data).eq('id', id);
+  if (error) throw new Error(`Error al actualizar gasto: ${error.message}`);
+}
+
+export async function deleteExpense(id: number) {
+  const { error } = await supabase.from('expenses').delete().eq('id', id);
+  if (error) throw new Error(`Error al eliminar gasto: ${error.message}`);
+}
+
+export async function getMonthlyExpenseStats(): Promise<{ month: string; amount: number }[]> {
+  const now = new Date();
+  const fromDate = new Date(now.getFullYear(), now.getMonth() - 11, 1).toISOString().split('T')[0];
+  const { data } = await supabase.from('expenses').select('date, amount').gte('date', fromDate);
+  const byMonth: Record<string, number> = {};
+  for (const row of (data ?? []) as any[]) {
+    if (!row.date) continue;
+    const month = row.date.substring(0, 7);
+    byMonth[month] = (byMonth[month] ?? 0) + (row.amount ?? 0);
+  }
+  const results: { month: string; amount: number }[] = [];
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const month = d.toISOString().substring(0, 7);
+    results.push({ month, amount: byMonth[month] ?? 0 });
+  }
+  return results;
+}
+
+// --- SUPPLIERS ---
+export async function getSuppliers(): Promise<Supplier[]> {
+  const { data } = await supabase.from('suppliers').select('*').order('name');
+  return (data ?? []) as Supplier[];
+}
+
+export async function getSupplier(id: number): Promise<Supplier | null> {
+  const { data } = await supabase.from('suppliers').select('*').eq('id', id).single();
+  return data as Supplier | null;
+}
+
+export async function createSupplier(data: Omit<Supplier, 'id' | 'created_at'>): Promise<number> {
+  const { data: row, error } = await supabase.from('suppliers').insert(data).select('id').single();
+  if (error) throw new Error(`Error al guardar proveedor: ${error.message}`);
+  return (row as any).id;
+}
+
+export async function updateSupplier(id: number, data: Partial<Omit<Supplier, 'id' | 'created_at'>>) {
+  const { error } = await supabase.from('suppliers').update(data).eq('id', id);
+  if (error) throw new Error(`Error al actualizar proveedor: ${error.message}`);
+}
+
+export async function deleteSupplier(id: number) {
+  const { error } = await supabase.from('suppliers').delete().eq('id', id);
+  if (error) throw new Error(`Error al eliminar proveedor: ${error.message}`);
+}
+
+export async function getExpensesBySupplier(supplierId: number): Promise<Expense[]> {
+  const { data } = await supabase
+    .from('expenses')
+    .select('*')
+    .eq('supplier_id', supplierId)
+    .order('date', { ascending: false });
+  return (data ?? []) as Expense[];
+}
+
+// --- TEAM MEMBERS ---
+export async function getTeamMembers(): Promise<TeamMember[]> {
+  const { data } = await supabase.from('team_members').select('*').order('name');
+  return (data ?? []) as TeamMember[];
+}
+
+export async function createTeamMember(data: Omit<TeamMember, 'id' | 'created_at'>): Promise<number> {
+  const { data: row, error } = await supabase.from('team_members').insert(data).select('id').single();
+  if (error) throw new Error(`Error al guardar miembro: ${error.message}`);
+  return (row as any).id;
+}
+
+export async function updateTeamMember(id: number, data: Partial<Omit<TeamMember, 'id' | 'created_at'>>) {
+  const { error } = await supabase.from('team_members').update(data).eq('id', id);
+  if (error) throw new Error(`Error al actualizar miembro: ${error.message}`);
+}
+
+export async function deleteTeamMember(id: number) {
+  const { error } = await supabase.from('team_members').delete().eq('id', id);
+  if (error) throw new Error(`Error al eliminar miembro: ${error.message}`);
+}
+
+// --- BUSINESS ANALYTICS ---
+export async function getBusinessAnalytics() {
+  const now = new Date();
+  const thisMonth = now.toISOString().substring(0, 7);
+  const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().substring(0, 7);
+
+  const [colThis, colLast, expThis, expLast, expByCat, salesCount, clientsCount] = await Promise.all([
+    supabase.from('installments').select('paid_amount').like('paid_date', `${thisMonth}%`),
+    supabase.from('installments').select('paid_amount').like('paid_date', `${lastMonth}%`),
+    supabase.from('expenses').select('amount').like('date', `${thisMonth}%`),
+    supabase.from('expenses').select('amount').like('date', `${lastMonth}%`),
+    supabase.from('expenses').select('category, amount').like('date', `${thisMonth}%`),
+    supabase.from('sales').select('id', { count: 'exact', head: true }).like('created_at', `${thisMonth}%`),
+    supabase.from('clients').select('id', { count: 'exact', head: true }).like('created_at', `${thisMonth}%`),
+  ]);
+
+  function sum(data: any[] | null, key: string) {
+    return ((data ?? []) as any[]).reduce((acc, r) => acc + (r[key] ?? 0), 0);
+  }
+
+  const thisCollected = sum(colThis.data, 'paid_amount');
+  const lastCollected = sum(colLast.data, 'paid_amount');
+  const thisExpenses = sum(expThis.data, 'amount');
+  const lastExpenses = sum(expLast.data, 'amount');
+
+  const byCategory: Record<string, number> = {};
+  for (const e of (expByCat.data ?? []) as any[]) {
+    byCategory[e.category] = (byCategory[e.category] ?? 0) + e.amount;
+  }
+
+  return {
+    thisMonth: {
+      collected: thisCollected,
+      expenses: thisExpenses,
+      net: thisCollected - thisExpenses,
+    },
+    lastMonth: {
+      collected: lastCollected,
+      expenses: lastExpenses,
+      net: lastCollected - lastExpenses,
+    },
+    newSalesThisMonth: salesCount.count ?? 0,
+    newClientsThisMonth: clientsCount.count ?? 0,
+    expensesByCategory: Object.entries(byCategory)
+      .sort(([, a], [, b]) => b - a)
+      .map(([category, amount]) => ({ category, amount })),
+  };
 }
 
 // --- EXPORT ---

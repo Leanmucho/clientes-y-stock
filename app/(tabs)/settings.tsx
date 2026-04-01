@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { exportAllData, getOverallStats } from '../../lib/database';
@@ -9,6 +9,7 @@ import { formatCurrency } from '../../lib/utils';
 import { downloadFile, toCSV } from '../../lib/download';
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const [userEmail, setUserEmail] = useState('');
   const [bizName, setBizName] = useState('');
   const [editingBiz, setEditingBiz] = useState(false);
@@ -96,7 +97,16 @@ export default function SettingsScreen() {
   const handleLogout = () => {
     Alert.alert('Cerrar sesión', '¿Estás seguro?', [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Salir', style: 'destructive', onPress: () => supabase.auth.signOut() },
+      {
+        text: 'Salir', style: 'destructive', onPress: async () => {
+          try {
+            // scope: 'local' no necesita red — limpia la sesión local de inmediato
+            await supabase.auth.signOut({ scope: 'local' });
+          } catch {}
+          // Forzar navegación al login como fallback por si onAuthStateChange no dispara
+          router.replace('/login');
+        },
+      },
     ]);
   };
 
@@ -131,6 +141,44 @@ export default function SettingsScreen() {
           <StatCard label="Total vendido" value={formatCurrency(stats.totalSold)} color={colors.primary} />
           <StatCard label="Total cobrado" value={formatCurrency(stats.totalCollected)} color={colors.success} />
           <StatCard label="Deuda pendiente" value={formatCurrency(stats.totalPending)} color={colors.warning} />
+        </View>
+      </View>
+
+      {/* Gestión */}
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>GESTIÓN</Text>
+        <View style={styles.card}>
+          <NavOption
+            icon="bar-chart-outline"
+            color={colors.primary}
+            title="Reportes y análisis"
+            subtitle="P&L, tendencias, categorías de gastos"
+            onPress={() => router.push('/reportes')}
+          />
+          <View style={styles.divider} />
+          <NavOption
+            icon="business-outline"
+            color={colors.success}
+            title="Proveedores"
+            subtitle="Gestión de proveedores y contactos"
+            onPress={() => router.push('/proveedores')}
+          />
+          <View style={styles.divider} />
+          <NavOption
+            icon="people-outline"
+            color={colors.warning}
+            title="Equipo"
+            subtitle="Miembros, roles y comisiones"
+            onPress={() => router.push('/equipo')}
+          />
+          <View style={styles.divider} />
+          <NavOption
+            icon="navigate-outline"
+            color={colors.textDim}
+            title="Zonas y Rutas"
+            subtitle="Cobros pendientes por zona"
+            onPress={() => router.push('/zones')}
+          />
         </View>
       </View>
 
@@ -239,6 +287,23 @@ function StatCard({ label, value, color }: { label: string; value: string; color
       <Text style={[styles.statValue, { color }]}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
     </View>
+  );
+}
+
+function NavOption({ icon, color, title, subtitle, onPress }: {
+  icon: any; color: string; title: string; subtitle: string; onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity style={styles.exportRow} onPress={onPress} activeOpacity={0.7}>
+      <View style={[styles.exportIcon, { backgroundColor: color + '22' }]}>
+        <Ionicons name={icon} size={20} color={color} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.exportTitle}>{title}</Text>
+        <Text style={styles.exportSubtitle}>{subtitle}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+    </TouchableOpacity>
   );
 }
 
