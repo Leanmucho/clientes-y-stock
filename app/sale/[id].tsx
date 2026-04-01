@@ -6,6 +6,7 @@ import {
 import { useFocusEffect, useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { getSale, getSaleItems, getInstallmentsBySale, registerPayment, updateSale, deleteSale } from '../../lib/database';
+import { supabase } from '../../lib/supabase';
 import { Sale, SaleItem, Installment } from '../../types';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatDate, getStatusColor, getStatusLabel, getTodayISO, formatInputNumber } from '../../lib/utils';
@@ -88,7 +89,13 @@ export default function SaleDetailScreen() {
     await load();
   };
 
-  const shareReceipt = (s: Sale, inst: Installment, amount: number, date: string) => {
+  const shareReceipt = async (s: Sale, inst: Installment, amount: number, date: string) => {
+    let bizName = 'Mi Negocio';
+    try {
+      const { data } = await supabase.auth.getUser();
+      bizName = data.user?.user_metadata?.business_name ?? 'Mi Negocio';
+    } catch {}
+
     Alert.alert(
       'Pago registrado',
       `¿Compartir comprobante con ${s.client_name}?`,
@@ -96,17 +103,27 @@ export default function SaleDetailScreen() {
         { text: 'No' },
         {
           text: 'Compartir', onPress: () => {
+            const remaining = s.installments_count - inst.installment_number;
             const lines = [
-              '🧾 COMPROBANTE DE PAGO',
-              '─────────────────────',
-              `Cliente: ${s.client_name}`,
-              `Compra: ${s.product_name}`,
-              `Cuota ${inst.installment_number} de ${s.installments_count}`,
-              `Monto: ${formatCurrency(amount)}`,
-              `Fecha: ${formatDate(date)}`,
-              '─────────────────────',
-              'Gracias por su pago ✅',
-            ].join('\n');
+              `🧾 *COMPROBANTE DE PAGO*`,
+              `📌 ${bizName}`,
+              `─────────────────────────`,
+              `*Cliente:* ${s.client_name}`,
+              `*Producto/Servicio:* ${s.product_name}`,
+              `─────────────────────────`,
+              `*Cuota:* ${inst.installment_number} de ${s.installments_count}`,
+              `*Monto abonado:* ${formatCurrency(amount)}`,
+              amount < inst.expected_amount
+                ? `*Saldo cuota:* ${formatCurrency(inst.expected_amount - amount)}`
+                : `✅ Cuota cancelada`,
+              `*Fecha de pago:* ${formatDate(date)}`,
+              `─────────────────────────`,
+              remaining > 0
+                ? `Cuotas restantes: ${remaining}`
+                : `🎉 ¡Plan de pago completado!`,
+              ``,
+              `Gracias por su pago 🙌`,
+            ].filter(Boolean).join('\n');
             Share.share({ message: lines });
           }
         },
@@ -277,6 +294,43 @@ export default function SaleDetailScreen() {
             <Ionicons name="pencil" size={14} color={colors.textDim} />
           </TouchableOpacity>
         ))}
+
+        {/* Share full summary */}
+        <TouchableOpacity
+          style={styles.shareBtn}
+          onPress={async () => {
+            let bizName = 'Mi Negocio';
+            try {
+              const { data } = await supabase.auth.getUser();
+              bizName = data.user?.user_metadata?.business_name ?? 'Mi Negocio';
+            } catch {}
+            const paidCount = installments.filter(i => i.status === 'paid').length;
+            const totalPaid = installments.reduce((acc, i) => acc + i.paid_amount, 0);
+            const pending = installments.reduce((acc, i) => acc + Math.max(i.expected_amount - i.paid_amount, 0), 0);
+            const lines = [
+              `📋 *ESTADO DE CUENTA*`,
+              `📌 ${bizName}`,
+              `─────────────────────────`,
+              `*Cliente:* ${sale.client_name}`,
+              `*Producto/Servicio:* ${sale.product_name}`,
+              `─────────────────────────`,
+              `*Total venta:* ${formatCurrency(sale.total_amount)}`,
+              `*Anticipo abonado:* ${formatCurrency(sale.advance_payment)}`,
+              `*Cuota mensual:* ${formatCurrency(sale.installment_amount)} (día ${sale.payment_day})`,
+              `─────────────────────────`,
+              `*Cuotas pagas:* ${paidCount} de ${sale.installments_count}`,
+              `*Total abonado:* ${formatCurrency(totalPaid)}`,
+              `*Saldo pendiente:* ${formatCurrency(pending)}`,
+              `─────────────────────────`,
+              pending > 0 ? `📅 Próximo vencimiento: día ${sale.payment_day}` : `✅ ¡Deuda cancelada!`,
+            ].join('\n');
+            Share.share({ message: lines });
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="share-social-outline" size={16} color={colors.primary} />
+          <Text style={styles.shareBtnText}>Compartir estado de cuenta</Text>
+        </TouchableOpacity>
 
         {/* Delete sale */}
         <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} activeOpacity={0.8}>
@@ -459,9 +513,15 @@ const styles = StyleSheet.create({
   paidDateRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
   paidDate: { fontSize: 11, color: colors.success },
   notes: { fontSize: 11, color: colors.textDim, fontStyle: 'italic', marginTop: 2 },
+  shareBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginTop: 16, padding: 14, borderRadius: 12,
+    backgroundColor: colors.primary + '15', borderWidth: 1, borderColor: colors.primary + '33',
+  },
+  shareBtnText: { color: colors.primary, fontWeight: '700', fontSize: 14 },
   deleteBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    marginTop: 24, padding: 14, borderRadius: 12,
+    marginTop: 10, padding: 14, borderRadius: 12,
     backgroundColor: colors.danger + '15', borderWidth: 1, borderColor: colors.danger + '33',
   },
   deleteBtnText: { color: colors.danger, fontWeight: '700', fontSize: 14 },

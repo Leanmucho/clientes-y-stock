@@ -9,14 +9,14 @@ import { initDatabase } from '../lib/database';
 import { colors } from '../lib/colors';
 import { BottomTabBar } from '../components/BottomTabBar';
 
-const SWIPE_TABS = ['/', '/clients', '/cobros', '/stock', '/zones', '/settings'];
+const SWIPE_TABS = ['/', '/clients', '/cobros', '/gastos', '/stock', '/settings'];
 
 function getActiveTabPath(pathname: string): string {
   if (pathname === '/' || pathname === '') return '/';
   if (pathname.startsWith('/clients') || pathname.startsWith('/client') || pathname.startsWith('/sale')) return '/clients';
   if (pathname.startsWith('/cobros')) return '/cobros';
+  if (pathname.startsWith('/gastos') || pathname.startsWith('/expense')) return '/gastos';
   if (pathname.startsWith('/stock') || pathname.startsWith('/product')) return '/stock';
-  if (pathname.startsWith('/zones')) return '/zones';
   if (pathname.startsWith('/settings')) return '/settings';
   return '/';
 }
@@ -114,6 +114,13 @@ export default function RootLayout() {
             <Stack.Screen name="product/new" options={{ title: 'Nuevo Producto', presentation: 'modal' }} />
             <Stack.Screen name="product/[id]" options={{ title: 'Producto' }} />
             <Stack.Screen name="zones" options={{ title: 'Zonas y Rutas' }} />
+            <Stack.Screen name="expense/new" options={{ title: 'Nuevo Gasto', presentation: 'modal' }} />
+            <Stack.Screen name="expense/[id]" options={{ title: 'Gasto' }} />
+            <Stack.Screen name="supplier/new" options={{ title: 'Nuevo Proveedor', presentation: 'modal' }} />
+            <Stack.Screen name="supplier/[id]" options={{ title: 'Proveedor' }} />
+            <Stack.Screen name="proveedores" options={{ title: 'Proveedores' }} />
+            <Stack.Screen name="equipo" options={{ title: 'Equipo' }} />
+            <Stack.Screen name="reportes" options={{ title: 'Reportes y Análisis' }} />
           </Stack>
         </View>
         {showTabBar && <BottomTabBar />}

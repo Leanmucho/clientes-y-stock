@@ -15,6 +15,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="index"    options={{ headerTitle: 'Panel Principal' }} />
       <Tabs.Screen name="clients"  options={{ headerTitle: 'Clientes' }} />
       <Tabs.Screen name="cobros"   options={{ headerTitle: 'Cobros' }} />
+      <Tabs.Screen name="gastos"   options={{ headerTitle: 'Gastos' }} />
       <Tabs.Screen name="stock"    options={{ headerTitle: 'Stock' }} />
       <Tabs.Screen name="settings" options={{ headerTitle: 'Configuración' }} />
     </Tabs>
