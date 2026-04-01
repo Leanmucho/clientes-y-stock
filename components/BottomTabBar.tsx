@@ -1,6 +1,7 @@
 import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { useRouter, usePathname } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../lib/colors';
 
 const TABS = [
@@ -26,9 +27,10 @@ export function BottomTabBar() {
   const router = useRouter();
   const pathname = usePathname();
   const activeTab = getActiveTab(pathname);
+  const insets = useSafeAreaInsets();
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingBottom: Math.max(insets.bottom, 8) }]}>
       {TABS.map((tab) => {
         const isActive = activeTab === tab.path;
         return (
@@ -57,11 +59,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopColor: colors.border,
     borderTopWidth: 1,
-    height: 58,
-    paddingBottom: 6,
-    paddingTop: 4,
+    paddingTop: 6,
   },
-  tab: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 1 },
+  tab: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 1, paddingBottom: 2 },
   label: { fontSize: 9, fontWeight: '600', color: colors.textDim },
   activeLabel: { color: colors.primary },
 });
