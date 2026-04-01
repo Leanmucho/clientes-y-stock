@@ -14,23 +14,7 @@ import { Client, Sale, ClientPayment } from '../../types';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatDate, formatInputNumber, getTodayISO, getStatusLabel } from '../../lib/utils';
 import { Loading } from '../../components/Loading';
-
-async function downloadFile(content: string, filename: string, mimeType: string) {
-  if (Platform.OS === 'web') {
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click();
-    document.body.removeChild(a); URL.revokeObjectURL(url);
-  } else {
-    const FileSystem = await import('expo-file-system');
-    const Sharing = await import('expo-sharing');
-    const path = `${FileSystem.documentDirectory}${filename}`;
-    await FileSystem.writeAsStringAsync(path, content, { encoding: FileSystem.EncodingType.UTF8 });
-    await Sharing.shareAsync(path, { mimeType, dialogTitle: `Guardar ${filename}` });
-  }
-}
+import { downloadFile } from '../../lib/download';
 
 export default function ClientDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
