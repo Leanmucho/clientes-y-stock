@@ -5,7 +5,7 @@
   "build": {
     "preview": {
       "android": {
-        "gradleCommand": ":app:assembleDebug",
+        "buildType": "apk",
         "image": "sdk-55"
       },
       "env": {
