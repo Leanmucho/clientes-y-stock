@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { initDatabase } from '../lib/database';
+import { cacheClear } from '../lib/cache';
 import { colors } from '../lib/colors';
 import { BottomTabBar } from '../components/BottomTabBar';
 
@@ -69,7 +70,11 @@ export default function RootLayout() {
       if (session) initDatabase();
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        // Limpiar caché al cerrar sesión — evita que el próximo usuario vea datos del anterior
+        cacheClear();
+      }
       setSession(session);
       if (session) initDatabase();
     });

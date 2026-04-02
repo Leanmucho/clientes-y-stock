@@ -21,3 +21,8 @@ export function cacheInvalidatePrefix(prefix: string) {
     if (k.startsWith(prefix)) delete store[k];
   }
 }
+
+/** Limpia todo el caché — llamar siempre al cerrar sesión para evitar que otro usuario vea datos del anterior */
+export function cacheClear() {
+  for (const k of Object.keys(store)) delete store[k];
+}
