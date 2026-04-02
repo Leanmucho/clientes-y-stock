@@ -39,7 +39,6 @@ export default function LoginScreen() {
             <Ionicons name="storefront" size={40} color={colors.primary} />
           </View>
           <Text style={styles.appName}>Clientes y Stock</Text>
-          <Text style={styles.bizName}>Mis Nietos Distribuidora</Text>
         </View>
 
         <View style={styles.card}>

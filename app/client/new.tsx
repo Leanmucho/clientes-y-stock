@@ -21,8 +21,8 @@ export default function NewClientScreen() {
     try {
       await createClient({ name: name.trim(), dni, phone, address, zone, reference });
       router.back();
-    } catch {
-      Alert.alert('Error', 'No se pudo guardar el cliente.');
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'No se pudo guardar el cliente.');
       setSaving(false);
     }
   };

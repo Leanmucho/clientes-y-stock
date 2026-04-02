@@ -12,6 +12,14 @@ export async function initDatabase() {
   await markOverdueInstallments();
 }
 
+// Helper: obtiene el user_id de la sesión activa
+// Usado en todos los inserts para no depender solo del trigger de la DB
+async function getUserId(): Promise<string> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user?.id) throw new Error('Sesión no encontrada. Cerrá sesión e ingresá nuevamente.');
+  return user.id;
+}
+
 // --- CLIENTS ---
 export async function getClients(): Promise<Client[]> {
   const cached = cacheGet<Client[]>('clients', TTL_LONG);
@@ -28,8 +36,9 @@ export async function getClient(id: number): Promise<Client | null> {
 }
 
 export async function createClient(data: Omit<Client, 'id' | 'created_at'>): Promise<number> {
-  const { data: row, error } = await supabase.from('clients').insert(data).select('id').single();
-  if (error) throw error;
+  const user_id = await getUserId();
+  const { data: row, error } = await supabase.from('clients').insert({ ...data, user_id }).select('id').single();
+  if (error) throw new Error(`Error al guardar cliente: ${error.message}`);
   cacheInvalidate('clients');
   return (row as any).id;
 }
@@ -62,8 +71,9 @@ export async function getProduct(id: number): Promise<Product | null> {
 }
 
 export async function createProduct(data: Omit<Product, 'id' | 'created_at'>): Promise<number> {
-  const { data: row, error } = await supabase.from('products').insert(data).select('id').single();
-  if (error) throw error;
+  const user_id = await getUserId();
+  const { data: row, error } = await supabase.from('products').insert({ ...data, user_id }).select('id').single();
+  if (error) throw new Error(`Error al guardar producto: ${error.message}`);
   cacheInvalidate('products');
   return (row as any).id;
 }
@@ -122,8 +132,10 @@ export async function createSale(
   data: Omit<Sale, 'id' | 'created_at' | 'client_name' | 'items'>,
   items: { product_id: number | null; product_name: string; quantity: number; unit_price: number }[]
 ): Promise<number> {
+  const user_id = await getUserId();
   const payload = {
     ...data,
+    user_id,
     delivery_date: data.delivery_date?.trim() || null,
     start_date: data.start_date?.trim() || new Date().toISOString().split('T')[0],
     notes: data.notes ?? '',
@@ -136,7 +148,7 @@ export async function createSale(
   if (items.length > 0) {
     const { error: itemsError } = await supabase
       .from('sale_items')
-      .insert(items.map(it => ({ ...it, sale_id: saleId })));
+      .insert(items.map(it => ({ ...it, sale_id: saleId, user_id })));
     if (itemsError) throw new Error(`Error al guardar los productos: ${itemsError.message}`);
 
     for (const it of items) {
@@ -190,8 +202,9 @@ export async function registerAdvancePayment(
   date: string,
   notes: string
 ) {
+  const user_id = await getUserId();
   const { error } = await supabase.from('client_payments').insert({
-    client_id: clientId, amount, date, notes,
+    client_id: clientId, amount, date, notes, user_id,
   });
   if (error) throw new Error(`Error al registrar pago: ${error.message}`);
 
@@ -232,7 +245,8 @@ export async function getInstallmentsBySale(saleId: number): Promise<Installment
 }
 
 export async function createInstallments(installments: Omit<Installment, 'id'>[]) {
-  const { error } = await supabase.from('installments').insert(installments);
+  const user_id = await getUserId();
+  const { error } = await supabase.from('installments').insert(installments.map(i => ({ ...i, user_id })));
   if (error) throw new Error(`Error al crear cuotas: ${error.message}`);
 }
 
@@ -475,7 +489,8 @@ export async function getExpensesByMonth(month: string): Promise<Expense[]> {
 }
 
 export async function createExpense(data: Omit<Expense, 'id' | 'created_at' | 'supplier_name'>): Promise<number> {
-  const { data: row, error } = await supabase.from('expenses').insert(data).select('id').single();
+  const user_id = await getUserId();
+  const { data: row, error } = await supabase.from('expenses').insert({ ...data, user_id }).select('id').single();
   if (error) throw new Error(`Error al guardar gasto: ${error.message}`);
   return (row as any).id;
 }
@@ -521,7 +536,8 @@ export async function getSupplier(id: number): Promise<Supplier | null> {
 }
 
 export async function createSupplier(data: Omit<Supplier, 'id' | 'created_at'>): Promise<number> {
-  const { data: row, error } = await supabase.from('suppliers').insert(data).select('id').single();
+  const user_id = await getUserId();
+  const { data: row, error } = await supabase.from('suppliers').insert({ ...data, user_id }).select('id').single();
   if (error) throw new Error(`Error al guardar proveedor: ${error.message}`);
   return (row as any).id;
 }
@@ -552,7 +568,8 @@ export async function getTeamMembers(): Promise<TeamMember[]> {
 }
 
 export async function createTeamMember(data: Omit<TeamMember, 'id' | 'created_at'>): Promise<number> {
-  const { data: row, error } = await supabase.from('team_members').insert(data).select('id').single();
+  const user_id = await getUserId();
+  const { data: row, error } = await supabase.from('team_members').insert({ ...data, user_id }).select('id').single();
   if (error) throw new Error(`Error al guardar miembro: ${error.message}`);
   return (row as any).id;
 }
