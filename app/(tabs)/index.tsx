@@ -72,9 +72,15 @@ export default function DashboardScreen() {
 
       {/* Stats */}
       <View style={styles.statsRow}>
-        <StatCard icon="people" label="Clientes" value={stats.totalClients.toString()} color={colors.primary} />
-        <StatCard icon="today" label="Cobros hoy" value={stats.todayCount.toString()} color={colors.warning} />
-        <StatCard icon="alert-circle" label="Vencidas" value={stats.overdueCount.toString()} color={colors.danger} />
+        <TouchableOpacity style={styles.statCardBtn} onPress={() => router.push('/clients')} activeOpacity={0.7}>
+          <StatCard icon="people" label="Clientes" value={stats.totalClients.toString()} color={colors.primary} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.statCardBtn} onPress={() => router.push('/cobros')} activeOpacity={0.7}>
+          <StatCard icon="today" label="Cobros hoy" value={stats.todayCount.toString()} color={colors.warning} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.statCardBtn} onPress={() => router.push('/cobros')} activeOpacity={0.7}>
+          <StatCard icon="alert-circle" label="Vencidas" value={stats.overdueCount.toString()} color={colors.danger} />
+        </TouchableOpacity>
       </View>
 
       {/* P&L row */}
@@ -213,6 +219,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 32 },
   statsRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
+  statCardBtn: { flex: 1 },
   statCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 14, padding: 14, alignItems: 'center', gap: 4, borderTopWidth: 3 },
   statValue: { fontSize: 22, fontWeight: '800', color: colors.text },
   statLabel: { fontSize: 11, color: colors.textMuted, fontWeight: '500' },
