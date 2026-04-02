@@ -63,7 +63,8 @@ export default function NewSaleScreen() {
   const count = parseInt(installmentsCount) || 0;
   const remaining = totalAmount - advance;
   const installmentAmount = count > 0 ? remaining / count : 0;
-  const previewDates = count > 0 && paymentDay
+  const isValidStartDate = /^\d{4}-\d{2}-\d{2}$/.test(startDate) && !isNaN(new Date(startDate).getTime());
+  const previewDates = count > 0 && paymentDay && isValidStartDate
     ? generateInstallmentDates(startDate, parseInt(paymentDay), Math.min(count, 3))
     : [];
 

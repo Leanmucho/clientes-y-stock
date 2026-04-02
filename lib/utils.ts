@@ -37,11 +37,15 @@ export function generateInstallmentDates(
 ): string[] {
   const dates: string[] = [];
   const start = new Date(startDate + 'T12:00:00');
+  // Fecha inválida (ej: usuario escribiendo a medias) → no crashear
+  if (isNaN(start.getTime())) return [];
 
   for (let i = 1; i <= count; i++) {
     const d = new Date(start);
     d.setMonth(d.getMonth() + i);
     d.setDate(paymentDay);
+    // setDate puede producir overflow (ej: feb 31 → mar 3), corregir
+    if (isNaN(d.getTime())) continue;
     dates.push(d.toISOString().split('T')[0]);
   }
   return dates;
