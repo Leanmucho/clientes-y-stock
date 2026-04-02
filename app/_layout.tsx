@@ -10,15 +10,15 @@ import { cacheClear } from '../lib/cache';
 import { colors } from '../lib/colors';
 import { BottomTabBar } from '../components/BottomTabBar';
 
-const SWIPE_TABS = ['/', '/clients', '/cobros', '/gastos', '/stock', '/settings'];
+const SWIPE_TABS = ['/', '/clients', '/cobros', '/rutas', '/stock', '/settings'];
 
 function getActiveTabPath(pathname: string): string {
   if (pathname === '/' || pathname === '') return '/';
   if (pathname.startsWith('/clients') || pathname.startsWith('/client') || pathname.startsWith('/sale')) return '/clients';
   if (pathname.startsWith('/cobros')) return '/cobros';
-  if (pathname.startsWith('/gastos') || pathname.startsWith('/expense')) return '/gastos';
+  if (pathname.startsWith('/rutas') || pathname.startsWith('/zones')) return '/rutas';
   if (pathname.startsWith('/stock') || pathname.startsWith('/product')) return '/stock';
-  if (pathname.startsWith('/settings')) return '/settings';
+  if (pathname.startsWith('/settings') || pathname.startsWith('/proveedores') || pathname.startsWith('/supplier') || pathname.startsWith('/equipo') || pathname.startsWith('/reportes') || pathname.startsWith('/gastos') || pathname.startsWith('/expense')) return '/settings';
   return '/';
 }
 

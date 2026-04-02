@@ -8,7 +8,7 @@ const TABS = [
   { label: 'Inicio',   icon: 'home',             path: '/' },
   { label: 'Clientes', icon: 'people',            path: '/clients' },
   { label: 'Cobros',   icon: 'cash',              path: '/cobros' },
-  { label: 'Gastos',   icon: 'receipt',           path: '/gastos' },
+  { label: 'Rutas',    icon: 'navigate',          path: '/rutas' },
   { label: 'Stock',    icon: 'cube',              path: '/stock' },
   { label: 'Más',      icon: 'ellipsis-horizontal-circle', path: '/settings' },
 ] as const;
@@ -17,9 +17,9 @@ function getActiveTab(pathname: string): string {
   if (pathname === '/' || pathname === '') return '/';
   if (pathname.startsWith('/clients') || pathname.startsWith('/client') || pathname.startsWith('/sale')) return '/clients';
   if (pathname.startsWith('/cobros')) return '/cobros';
-  if (pathname.startsWith('/gastos') || pathname.startsWith('/expense')) return '/gastos';
+  if (pathname.startsWith('/rutas') || pathname.startsWith('/zones')) return '/rutas';
   if (pathname.startsWith('/stock') || pathname.startsWith('/product')) return '/stock';
-  if (pathname.startsWith('/settings') || pathname.startsWith('/zones') || pathname.startsWith('/proveedores') || pathname.startsWith('/supplier') || pathname.startsWith('/equipo') || pathname.startsWith('/reportes')) return '/settings';
+  if (pathname.startsWith('/settings') || pathname.startsWith('/proveedores') || pathname.startsWith('/supplier') || pathname.startsWith('/equipo') || pathname.startsWith('/reportes') || pathname.startsWith('/gastos') || pathname.startsWith('/expense')) return '/settings';
   return '/';
 }
 
