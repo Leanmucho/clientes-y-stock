@@ -56,7 +56,7 @@ export default function ProductDetailScreen() {
         setImageUri(null);
       }
       setLoading(false);
-    });
+    }).catch(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [id]));
 
@@ -101,9 +101,13 @@ export default function ProductDetailScreen() {
   const handleAdjustStock = async (delta: number) => {
     if (!product) return;
     const newStock = Math.max(0, product.stock + delta);
-    await updateProduct(Number(id), { stock: newStock });
-    await load();
-    setStockDelta('');
+    try {
+      await updateProduct(Number(id), { stock: newStock });
+      await load();
+      setStockDelta('');
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'No se pudo ajustar el stock.');
+    }
   };
 
   const handleManualStock = async () => {

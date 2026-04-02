@@ -22,8 +22,8 @@ export default function SettingsScreen() {
     supabase.auth.getUser().then(({ data }) => {
       setUserEmail(data.user?.email ?? '');
       setBizName(data.user?.user_metadata?.business_name ?? 'Mi Negocio');
-    });
-    getOverallStats().then(setStats);
+    }).catch(() => {});
+    getOverallStats().then(setStats).catch(() => {});
   }, []));
 
   const handleSaveBizName = async () => {

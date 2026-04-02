@@ -21,8 +21,12 @@ export default function DashboardScreen() {
   const [showMonthly, setShowMonthly] = useState(false);
 
   const load = useCallback(async () => {
+    const today = new Date().toISOString().split('T')[0];
     const [s, p, m, me] = await Promise.all([getDashboardStats(), getTodayInstallments(), getMonthlyStats(), getMonthlyExpenseStats()]);
-    setStats(s); setPending(p); setMonthly(m); setMonthlyExp(me); setLoading(false);
+    const corrected = p.map((i: any) =>
+      i.status === 'pending' && i.due_date < today ? { ...i, status: 'overdue' } : i
+    );
+    setStats(s); setPending(corrected); setMonthly(m); setMonthlyExp(me); setLoading(false);
   }, []);
 
   useFocusEffect(useCallback(() => {

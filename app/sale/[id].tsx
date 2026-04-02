@@ -52,7 +52,7 @@ export default function SaleDetailScreen() {
     Promise.all([getSale(Number(id)), getSaleItems(Number(id)), getInstallmentsBySale(Number(id))]).then(([s, its, insts]) => {
       if (!active) return;
       setSale(s); setSaleItems(its); setInstallments(insts); setLoading(false);
-    });
+    }).catch(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [id]));
 
@@ -109,10 +109,15 @@ export default function SaleDetailScreen() {
   const handleMarkUnpaid = async () => {
     if (!paymentModal) return;
     setRegistering(true);
-    await registerPayment(paymentModal.id, 0, '', '');
-    setPaymentModal(null);
-    setRegistering(false);
-    await load();
+    try {
+      await registerPayment(paymentModal.id, 0, '', '');
+      setPaymentModal(null);
+      await load();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'No se pudo actualizar la cuota.');
+    } finally {
+      setRegistering(false);
+    }
   };
 
   const shareReceipt = async (s: Sale, inst: Installment, amount: number, date: string) => {

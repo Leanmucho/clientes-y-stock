@@ -44,7 +44,8 @@ export async function createClient(data: Omit<Client, 'id' | 'created_at'>): Pro
 }
 
 export async function updateClient(id: number, data: Omit<Client, 'id' | 'created_at'>) {
-  await supabase.from('clients').update(data).eq('id', id);
+  const { error } = await supabase.from('clients').update(data).eq('id', id);
+  if (error) throw new Error(`Error al actualizar cliente: ${error.message}`);
   cacheInvalidate('clients', `client-${id}`);
 }
 
@@ -79,7 +80,8 @@ export async function createProduct(data: Omit<Product, 'id' | 'created_at'>): P
 }
 
 export async function updateProduct(id: number, data: Partial<Omit<Product, 'id' | 'created_at'>>) {
-  await supabase.from('products').update(data).eq('id', id);
+  const { error } = await supabase.from('products').update(data).eq('id', id);
+  if (error) throw new Error(`Error al actualizar producto: ${error.message}`);
   cacheInvalidate('products', `product-${id}`);
 }
 
@@ -153,7 +155,8 @@ export async function createSale(
 
     for (const it of items) {
       if (it.product_id) {
-        await supabase.rpc('adjust_stock', { product_id: it.product_id, delta: -it.quantity });
+        const { error: stockErr } = await supabase.rpc('adjust_stock', { product_id: it.product_id, delta: -it.quantity });
+        if (stockErr) console.warn(`Stock adjustment failed for product ${it.product_id}: ${stockErr.message}`);
       }
     }
   }
@@ -226,10 +229,11 @@ export async function registerAdvancePayment(
     const applying = Math.min(remaining, stillOwed);
     const newPaid = inst.paid_amount + applying;
     const newStatus = newPaid >= inst.expected_amount ? 'paid' : 'partial';
-    await supabase
+    const { error: updErr } = await supabase
       .from('installments')
       .update({ paid_amount: newPaid, paid_date: date, status: newStatus })
       .eq('id', inst.id);
+    if (updErr) throw new Error(`Error al aplicar pago a cuota ${inst.id}: ${updErr.message}`);
     remaining -= applying;
   }
 }

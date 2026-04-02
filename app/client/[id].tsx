@@ -69,7 +69,7 @@ export default function ClientDetailScreen() {
       if (!active) return;
       setClient(c); setSales(s); setPayments(p); setPendingDebt(debt);
       setLoading(false);
-    });
+    }).catch(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [id]));
 

@@ -72,7 +72,10 @@ export default function NewSaleScreen() {
     const validItems = items.filter(it => it.productName.trim() && (parseFloat(it.unitPrice) || 0) > 0);
     if (validItems.length === 0) return Alert.alert('Requerido', 'Agregá al menos un producto con nombre y precio.');
     if (totalAmount <= 0) return Alert.alert('Requerido', 'El monto total debe ser mayor a 0.');
+    if (advance < 0) return Alert.alert('Inválido', 'El anticipo no puede ser negativo.');
+    if (advance > totalAmount) return Alert.alert('Inválido', `El anticipo (${formatCurrency(advance)}) no puede ser mayor al total (${formatCurrency(totalAmount)}).`);
     if (count <= 0) return Alert.alert('Requerido', 'Ingresá la cantidad de cuotas.');
+    if (count > 360) return Alert.alert('Inválido', 'La cantidad de cuotas no puede superar 360.');
     const day = parseInt(paymentDay);
     if (!day || day < 1 || day > 31) return Alert.alert('Inválido', 'El día de pago debe ser entre 1 y 31.');
 
