@@ -132,21 +132,38 @@ export default function ClientDetailScreen() {
   const handleRegisterPayment = async () => {
     const amount = parseFloat(payAmount);
     if (isNaN(amount) || amount <= 0) return Alert.alert('Inválido', 'Ingresá un monto mayor a 0.');
-    if (amount > pendingDebt + 1) {
+
+    // Si el monto supera la deuda, confirmar antes de registrar
+    if (pendingDebt > 0 && amount > pendingDebt) {
+      const surplus = amount - pendingDebt;
       const ok = await new Promise<boolean>(resolve => {
         Alert.alert(
-          'Monto mayor a la deuda',
-          `La deuda pendiente es ${formatCurrency(pendingDebt)}. ¿Registrar igual?`,
-          [{ text: 'Cancelar', onPress: () => resolve(false) }, { text: 'Sí', onPress: () => resolve(true) }]
+          'Pago mayor a la deuda',
+          `La deuda pendiente es ${formatCurrency(pendingDebt)}.\n\nSe registrará ${formatCurrency(amount)} y todas las cuotas quedarán como pagadas. El excedente de ${formatCurrency(surplus)} quedará registrado como pago histórico.\n\n¿Continuar?`,
+          [
+            { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+            { text: 'Confirmar', onPress: () => resolve(true) },
+          ]
         );
       });
       if (!ok) return;
     }
+
     setRegistering(true);
     try {
-      await registerAdvancePayment(Number(id), amount, payDate, payNotes.trim());
+      const { installmentsPaid, surplus } = await registerAdvancePayment(Number(id), amount, payDate, payNotes.trim());
       setPayModal(false);
       await load();
+
+      // Mostrar resultado claro al usuario
+      if (surplus > 0) {
+        Alert.alert(
+          '✅ Pago registrado',
+          `Se pagaron ${installmentsPaid} cuota${installmentsPaid !== 1 ? 's' : ''}.\n\nExcedente de ${formatCurrency(surplus)} quedó registrado en el historial de pagos.`
+        );
+      } else if (installmentsPaid > 0) {
+        Alert.alert('✅ Pago registrado', `Se pagaron ${installmentsPaid} cuota${installmentsPaid !== 1 ? 's' : ''} correctamente.`);
+      }
     } catch (e: any) {
       Alert.alert('Error', e?.message ?? 'No se pudo registrar el pago.');
     } finally {
@@ -370,7 +387,18 @@ export default function ClientDetailScreen() {
               </View>
             )}
 
-            <Text style={styles.modalLabel}>Monto</Text>
+            <View style={styles.modalLabelRow}>
+              <Text style={styles.modalLabel}>Monto</Text>
+              {pendingDebt > 0 && (
+                <TouchableOpacity
+                  onPress={() => setPayAmount(Math.round(pendingDebt).toString())}
+                  style={styles.payAllBtn}
+                >
+                  <Ionicons name="checkmark-done" size={13} color={colors.success} />
+                  <Text style={styles.payAllBtnText}>Pagar todo ({formatCurrency(pendingDebt)})</Text>
+                </TouchableOpacity>
+              )}
+            </View>
             <View style={styles.modalInputRow}>
               <Text style={styles.modalPrefix}>$</Text>
               <TextInput
@@ -382,6 +410,11 @@ export default function ClientDetailScreen() {
                 placeholderTextColor={colors.textDim}
                 autoFocus
               />
+              {payAmount !== '' && (
+                <TouchableOpacity onPress={() => setPayAmount('')} style={{ padding: 4 }}>
+                  <Ionicons name="close-circle" size={18} color={colors.textDim} />
+                </TouchableOpacity>
+              )}
             </View>
 
             <Text style={styles.modalLabel}>Fecha (AAAA-MM-DD)</Text>
@@ -588,7 +621,10 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 17, fontWeight: '800', color: colors.text, marginBottom: 16 },
   debtInfo: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.bg, borderRadius: 10, padding: 10, marginBottom: 16 },
   debtInfoText: { fontSize: 13, color: colors.textMuted },
-  modalLabel: { fontSize: 12, color: colors.textMuted, fontWeight: '600', marginBottom: 6, marginLeft: 2 },
+  modalLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, marginLeft: 2 },
+  modalLabel: { fontSize: 12, color: colors.textMuted, fontWeight: '600' },
+  payAllBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.success + '22', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  payAllBtnText: { fontSize: 11, fontWeight: '700', color: colors.success },
   modalInputRow: {
     backgroundColor: colors.bg, borderRadius: 12, flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: colors.border, marginBottom: 12,

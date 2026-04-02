@@ -199,12 +199,13 @@ export async function getClientPendingDebt(clientId: number): Promise<number> {
   return ((data ?? []) as any[]).reduce((acc, i) => acc + (i.expected_amount - i.paid_amount), 0);
 }
 
+// Retorna cuántas cuotas quedaron pagadas y si hubo excedente sin aplicar
 export async function registerAdvancePayment(
   clientId: number,
   amount: number,
   date: string,
   notes: string
-) {
+): Promise<{ installmentsPaid: number; surplus: number }> {
   const user_id = await getUserId();
   const { error } = await supabase.from('client_payments').insert({
     client_id: clientId, amount, date, notes, user_id,
@@ -213,7 +214,7 @@ export async function registerAdvancePayment(
 
   const { data: sales } = await supabase.from('sales').select('id').eq('client_id', clientId);
   const saleIds = (sales ?? []).map((s: any) => s.id);
-  if (saleIds.length === 0) return;
+  if (saleIds.length === 0) return { installmentsPaid: 0, surplus: amount };
 
   const { data: installments } = await supabase
     .from('installments')
@@ -223,12 +224,19 @@ export async function registerAdvancePayment(
     .order('due_date');
 
   let remaining = amount;
+  let installmentsPaid = 0;
+
   for (const inst of (installments ?? []) as any[]) {
     if (remaining <= 0) break;
+    // Protección: saltar cuotas donde no hay nada por cobrar (expected <= paid)
     const stillOwed = inst.expected_amount - inst.paid_amount;
+    if (stillOwed <= 0) continue;
+
     const applying = Math.min(remaining, stillOwed);
     const newPaid = inst.paid_amount + applying;
     const newStatus = newPaid >= inst.expected_amount ? 'paid' : 'partial';
+    if (newStatus === 'paid') installmentsPaid++;
+
     const { error: updErr } = await supabase
       .from('installments')
       .update({ paid_amount: newPaid, paid_date: date, status: newStatus })
@@ -236,6 +244,8 @@ export async function registerAdvancePayment(
     if (updErr) throw new Error(`Error al aplicar pago a cuota ${inst.id}: ${updErr.message}`);
     remaining -= applying;
   }
+
+  return { installmentsPaid, surplus: Math.max(0, remaining) };
 }
 
 // --- INSTALLMENTS ---
