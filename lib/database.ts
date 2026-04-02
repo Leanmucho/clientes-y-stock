@@ -240,7 +240,8 @@ export async function registerPayment(
   installmentId: number,
   paidAmount: number,
   paidDate: string,
-  notes: string
+  notes: string,
+  dueDate?: string
 ) {
   const { data: inst } = await supabase
     .from('installments')
@@ -254,11 +255,23 @@ export async function registerPayment(
   else if (paidAmount >= (inst as any).expected_amount) status = 'paid';
   else status = 'partial';
 
+  const update: Record<string, any> = { paid_amount: paidAmount, paid_date: paidDate || null, status, notes };
+  if (dueDate) update.due_date = dueDate;
+
   const { error } = await supabase
     .from('installments')
-    .update({ paid_amount: paidAmount, paid_date: paidDate || null, status, notes })
+    .update(update)
     .eq('id', installmentId);
   if (error) throw new Error(`Error al registrar pago: ${error.message}`);
+}
+
+// Guarda solo metadatos (vencimiento y notas) sin registrar pago
+export async function saveInstallmentMeta(installmentId: number, dueDate: string, notes: string) {
+  const { error } = await supabase
+    .from('installments')
+    .update({ due_date: dueDate, notes })
+    .eq('id', installmentId);
+  if (error) throw new Error(`Error al actualizar cuota: ${error.message}`);
 }
 
 // --- CLIENT EXPORT ---

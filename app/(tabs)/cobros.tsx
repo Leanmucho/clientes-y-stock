@@ -27,24 +27,30 @@ type PendingItem = {
 type TabKey = 'hoy' | 'todos';
 
 async function fetchPending(): Promise<PendingItem[]> {
+  const today = new Date().toISOString().split('T')[0];
   const { data } = await supabase
     .from('installments')
     .select('id, sale_id, installment_number, due_date, expected_amount, paid_amount, status, sales(product_name, client_id, clients(name))')
     .in('status', ['pending', 'partial', 'overdue'])
     .order('due_date', { ascending: true });
 
-  return ((data ?? []) as any[]).map((i) => ({
-    id: i.id,
-    sale_id: i.sale_id,
-    installment_number: i.installment_number,
-    due_date: i.due_date,
-    expected_amount: i.expected_amount,
-    paid_amount: i.paid_amount,
-    status: i.status,
-    client_name: i.sales?.clients?.name ?? '',
-    client_id: i.sales?.client_id ?? 0,
-    product_name: i.sales?.product_name ?? '',
-  }));
+  return ((data ?? []) as any[]).map((i) => {
+    // Corrección cliente-side: si el vencimiento ya pasó y el DB todavía dice 'pending', mostrar como overdue
+    const effectiveStatus =
+      i.status === 'pending' && i.due_date < today ? 'overdue' : i.status;
+    return {
+      id: i.id,
+      sale_id: i.sale_id,
+      installment_number: i.installment_number,
+      due_date: i.due_date,
+      expected_amount: i.expected_amount,
+      paid_amount: i.paid_amount,
+      status: effectiveStatus,
+      client_name: i.sales?.clients?.name ?? '',
+      client_id: i.sales?.client_id ?? 0,
+      product_name: i.sales?.product_name ?? '',
+    };
+  });
 }
 
 export default function CobrosScreen() {
@@ -64,12 +70,15 @@ export default function CobrosScreen() {
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    markOverdueInstallments().then(() => fetchPending()).then((data) => {
-      if (!active) return;
-      setItems(data);
-      setLoading(false);
-    });
-    setLoading(false);
+    setLoading(true);
+    markOverdueInstallments()
+      .then(() => fetchPending())
+      .then((data) => {
+        if (!active) return;
+        setItems(data);
+        setLoading(false);
+      })
+      .catch(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, []));
 

@@ -27,11 +27,18 @@ export default function DashboardScreen() {
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    Promise.all([getDashboardStats(), getTodayInstallments(), getMonthlyStats(), getMonthlyExpenseStats()]).then(([s, p, m, me]) => {
-      if (!active) return;
-      setStats(s); setPending(p); setMonthly(m); setMonthlyExp(me); setLoading(false);
-    });
-    setLoading(false);
+    setLoading(true);
+    const today = new Date().toISOString().split('T')[0];
+    Promise.all([getDashboardStats(), getTodayInstallments(), getMonthlyStats(), getMonthlyExpenseStats()])
+      .then(([s, p, m, me]) => {
+        if (!active) return;
+        // Corrección cliente-side: si due_date ya pasó y DB todavía dice 'pending', tratar como overdue
+        const corrected = p.map((i: any) =>
+          i.status === 'pending' && i.due_date < today ? { ...i, status: 'overdue' } : i
+        );
+        setStats(s); setPending(corrected); setMonthly(m); setMonthlyExp(me); setLoading(false);
+      })
+      .catch(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, []));
 

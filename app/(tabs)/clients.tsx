@@ -16,8 +16,10 @@ export default function ClientsScreen() {
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    getClients().then((data) => { if (active) { setClients(data); setLoading(false); } });
-    setLoading(false);
+    setLoading(true);
+    getClients()
+      .then((data) => { if (active) { setClients(data); setLoading(false); } })
+      .catch(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, []));
 
@@ -30,10 +32,15 @@ export default function ClientsScreen() {
 
   if (loading) return <Loading />;
 
-  const filtered = clients.filter((c) =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    c.dni.includes(search) || c.phone.includes(search)
-  );
+  const filtered = clients.filter((c) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (
+      c.name.toLowerCase().includes(q) ||
+      (c.dni ?? '').includes(search) ||
+      (c.phone ?? '').includes(search)
+    );
+  });
 
   return (
     <>

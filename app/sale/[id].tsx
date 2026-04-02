@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getSale, getSaleItems, getInstallmentsBySale, registerPayment, updateSale, deleteSale } from '../../lib/database';
+import { getSale, getSaleItems, getInstallmentsBySale, registerPayment, saveInstallmentMeta, updateSale, deleteSale } from '../../lib/database';
 import { supabase } from '../../lib/supabase';
 import { Sale, SaleItem, Installment } from '../../types';
 import { colors } from '../../lib/colors';
@@ -25,6 +25,7 @@ export default function SaleDetailScreen() {
   const [paymentModal, setPaymentModal] = useState<Installment | null>(null);
   const [payAmount, setPayAmount] = useState('');
   const [payDate, setPayDate] = useState(getTodayISO());
+  const [payDueDate, setPayDueDate] = useState('');
   const [payNotes, setPayNotes] = useState('');
   const [registering, setRegistering] = useState(false);
 
@@ -59,24 +60,49 @@ export default function SaleDetailScreen() {
 
   const openPayment = (inst: Installment) => {
     setPaymentModal(inst);
-    setPayAmount(inst.paid_amount > 0 ? inst.paid_amount.toString() : inst.expected_amount.toString());
+    // Si ya tiene pago previo, pre-rellenar con ese monto; si está pendiente, dejar vacío
+    // para que el usuario tenga que escribir intencionalmente el monto
+    setPayAmount(inst.paid_amount > 0 ? inst.paid_amount.toString() : '');
     setPayDate(inst.paid_date ?? getTodayISO());
+    setPayDueDate(inst.due_date);
     setPayNotes(inst.notes ?? '');
   };
 
   const handleRegisterPayment = async () => {
     if (!paymentModal) return;
-    const amount = parseFloat(payAmount);
-    if (isNaN(amount) || amount < 0) return Alert.alert('Inválido', 'Ingresá un monto válido.');
+
+    // Validar fecha de vencimiento
+    if (!payDueDate.match(/^\d{4}-\d{2}-\d{2}$/))
+      return Alert.alert('Fecha inválida', 'El vencimiento debe tener formato AAAA-MM-DD.');
+
+    const amountStr = payAmount.trim();
+    const amount = amountStr === '' ? -1 : parseFloat(amountStr);
+
     setRegistering(true);
-    await registerPayment(paymentModal.id, amount, payDate, payNotes);
+    try {
+      if (amountStr === '') {
+        // Sin monto → solo guardar vencimiento y notas, sin tocar el estado de pago
+        await saveInstallmentMeta(paymentModal.id, payDueDate, payNotes);
+      } else {
+        if (isNaN(amount) || amount < 0) {
+          setRegistering(false);
+          return Alert.alert('Inválido', 'Ingresá un monto válido.');
+        }
+        await registerPayment(paymentModal.id, amount, payDate, payNotes, payDueDate);
+      }
+    } catch (e: any) {
+      setRegistering(false);
+      return Alert.alert('Error', e?.message ?? 'No se pudo guardar.');
+    }
+
+    const savedModal = paymentModal;
+    const savedAmount = amount;
     setPaymentModal(null);
     setRegistering(false);
     await load();
-    // Share receipt option
-    if (sale && amount > 0) {
-      const inst = installments.find(i => i.id === paymentModal.id);
-      shareReceipt(sale, paymentModal, amount, payDate);
+
+    if (sale && amountStr !== '' && savedAmount > 0) {
+      shareReceipt(sale, savedModal, savedAmount, payDate);
     }
   };
 
@@ -344,47 +370,77 @@ export default function SaleDetailScreen() {
         <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>Cuota {paymentModal?.installment_number} — {formatDate(paymentModal?.due_date ?? '')}</Text>
+            <Text style={styles.modalTitle}>Cuota {paymentModal?.installment_number}</Text>
             <View style={styles.expectedBox}>
               <Ionicons name="information-circle-outline" size={15} color={colors.textDim} />
               <Text style={styles.expectedText}>
                 Monto esperado: <Text style={{ color: colors.text, fontWeight: '700' }}>{formatCurrency(paymentModal?.expected_amount ?? 0)}</Text>
               </Text>
             </View>
-            <Text style={styles.modalLabel}>Monto que pagó</Text>
+
+            <Text style={styles.modalLabel}>Fecha de vencimiento (AAAA-MM-DD)</Text>
+            <View style={styles.modalInputWrapper}>
+              <Ionicons name="calendar-outline" size={15} color={colors.textDim} />
+              <TextInput
+                style={[styles.modalInput, { marginLeft: 6 }]}
+                value={payDueDate}
+                onChangeText={setPayDueDate}
+                keyboardType="numeric"
+                placeholder="AAAA-MM-DD"
+                placeholderTextColor={colors.textDim}
+              />
+            </View>
+
+            <Text style={styles.modalLabel}>Monto que pagó (dejar vacío para solo editar fecha)</Text>
             <View style={styles.modalInputWrapper}>
               <Text style={styles.modalPrefix}>$</Text>
               <TextInput
                 style={styles.modalInput}
-                value={formatInputNumber(payAmount)}
+                value={payAmount === '' ? '' : formatInputNumber(payAmount)}
                 onChangeText={v => setPayAmount(v.replace(/\D/g, ''))}
                 keyboardType="numeric"
-                placeholder="0"
+                placeholder={`${formatInputNumber(paymentModal?.expected_amount?.toString() ?? '0')} (opcional)`}
                 placeholderTextColor={colors.textDim}
-                autoFocus
               />
+              {payAmount !== '' && (
+                <TouchableOpacity onPress={() => setPayAmount('')} style={{ padding: 4 }}>
+                  <Ionicons name="close-circle" size={18} color={colors.textDim} />
+                </TouchableOpacity>
+              )}
             </View>
-            <Text style={styles.modalLabel}>Fecha de pago (AAAA-MM-DD)</Text>
-            <View style={styles.modalInputWrapper}>
-              <TextInput style={styles.modalInput} value={payDate} onChangeText={setPayDate} keyboardType="numeric" placeholder={getTodayISO()} placeholderTextColor={colors.textDim} />
-            </View>
+
+            {payAmount !== '' && (
+              <>
+                <Text style={styles.modalLabel}>Fecha de pago (AAAA-MM-DD)</Text>
+                <View style={styles.modalInputWrapper}>
+                  <TextInput style={styles.modalInput} value={payDate} onChangeText={setPayDate} keyboardType="numeric" placeholder={getTodayISO()} placeholderTextColor={colors.textDim} />
+                </View>
+              </>
+            )}
+
             <Text style={styles.modalLabel}>Notas (opcional)</Text>
             <View style={styles.modalInputWrapper}>
               <TextInput style={styles.modalInput} value={payNotes} onChangeText={setPayNotes} placeholder="Ej: Pagó con transferencia" placeholderTextColor={colors.textDim} />
             </View>
+
             <View style={styles.modalButtons}>
               <TouchableOpacity style={styles.modalCancel} onPress={() => setPaymentModal(null)}>
                 <Text style={styles.modalCancelText}>Cancelar</Text>
               </TouchableOpacity>
-              {paymentModal?.status !== 'pending' && (
+              {paymentModal?.status !== 'pending' && paymentModal?.status !== 'overdue' && (
                 <TouchableOpacity style={styles.modalUnpaid} onPress={handleMarkUnpaid} disabled={registering}>
                   <Ionicons name="close-circle-outline" size={16} color={colors.danger} />
                   <Text style={styles.modalUnpaidText}>Sin pago</Text>
                 </TouchableOpacity>
               )}
               <TouchableOpacity style={[styles.modalConfirm, registering && { opacity: 0.6 }]} onPress={handleRegisterPayment} disabled={registering}>
-                <Ionicons name="checkmark-circle" size={16} color={colors.white} />
-                <Text style={styles.modalConfirmText}>{registering ? 'Guardando...' : 'Registrar'}</Text>
+                {registering
+                  ? <ActivityIndicator color={colors.white} size="small" />
+                  : <>
+                      <Ionicons name="checkmark-circle" size={16} color={colors.white} />
+                      <Text style={styles.modalConfirmText}>{payAmount === '' ? 'Guardar' : 'Registrar pago'}</Text>
+                    </>
+                }
               </TouchableOpacity>
             </View>
           </View>

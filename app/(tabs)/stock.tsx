@@ -23,8 +23,10 @@ export default function StockScreen() {
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    getProducts().then((data) => { if (active) { setProducts(data); setLoading(false); } });
-    setLoading(false);
+    setLoading(true);
+    getProducts()
+      .then((data) => { if (active) { setProducts(data); setLoading(false); } })
+      .catch(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, []));
 

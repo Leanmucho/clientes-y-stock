@@ -94,19 +94,27 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const doLogout = async () => {
+      try { await supabase.auth.signOut(); } catch {}
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.location.href = '/';
+      } else {
+        router.replace('/login');
+      }
+    };
+
+    // Alert.alert en web usa window.alert() nativo que no soporta callbacks en botones
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm('¿Cerrar sesión?')) {
+        await doLogout();
+      }
+      return;
+    }
+
     Alert.alert('Cerrar sesión', '¿Estás seguro?', [
       { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Salir', style: 'destructive', onPress: async () => {
-          try {
-            // scope: 'local' no necesita red — limpia la sesión local de inmediato
-            await supabase.auth.signOut({ scope: 'local' });
-          } catch {}
-          // Forzar navegación al login como fallback por si onAuthStateChange no dispara
-          router.replace('/login');
-        },
-      },
+      { text: 'Salir', style: 'destructive', onPress: doLogout },
     ]);
   };
 
