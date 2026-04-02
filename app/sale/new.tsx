@@ -9,6 +9,7 @@ import { createSale, createInstallments, getProducts } from '../../lib/database'
 import { Product } from '../../types';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatInputNumber, getTodayISO, generateInstallmentDates } from '../../lib/utils';
+import { DateInput } from '../../components/DateInput';
 
 interface ItemForm {
   key: string;
@@ -350,32 +351,12 @@ export default function NewSaleScreen() {
         {/* Dates */}
         <Text style={[styles.sectionLabel, { marginTop: 12 }]}>FECHAS</Text>
         <View style={styles.field}>
-          <Text style={styles.fieldLabel}>Fecha de inicio (AAAA-MM-DD)</Text>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="today-outline" size={14} color={colors.textDim} style={{ marginRight: 6 }} />
-            <TextInput
-              style={styles.input}
-              value={startDate}
-              onChangeText={setStartDate}
-              placeholder="Ej: 2025-03-11"
-              placeholderTextColor={colors.textDim}
-              keyboardType="numeric"
-            />
-          </View>
+          <Text style={styles.fieldLabel}>Fecha de inicio</Text>
+          <DateInput value={startDate} onChange={setStartDate} placeholder="AAAA-MM-DD" />
         </View>
         <View style={styles.field}>
-          <Text style={styles.fieldLabel}>Fecha de entrega (AAAA-MM-DD)</Text>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="cube-outline" size={14} color={colors.textDim} style={{ marginRight: 6 }} />
-            <TextInput
-              style={styles.input}
-              value={deliveryDate}
-              onChangeText={setDeliveryDate}
-              placeholder="Opcional"
-              placeholderTextColor={colors.textDim}
-              keyboardType="numeric"
-            />
-          </View>
+          <Text style={styles.fieldLabel}>Fecha de entrega (opcional)</Text>
+          <DateInput value={deliveryDate} onChange={setDeliveryDate} placeholder="Opcional — AAAA-MM-DD" />
         </View>
 
         <TouchableOpacity

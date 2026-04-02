@@ -14,6 +14,7 @@ import { Client, Sale, ClientPayment } from '../../types';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatDate, formatInputNumber, getTodayISO, getStatusLabel } from '../../lib/utils';
 import { Loading } from '../../components/Loading';
+import { DateInput } from '../../components/DateInput';
 import { downloadFile } from '../../lib/download';
 
 export default function ClientDetailScreen() {
@@ -417,17 +418,8 @@ export default function ClientDetailScreen() {
               )}
             </View>
 
-            <Text style={styles.modalLabel}>Fecha (AAAA-MM-DD)</Text>
-            <View style={styles.modalInputRow}>
-              <TextInput
-                style={styles.modalInput}
-                value={payDate}
-                onChangeText={setPayDate}
-                keyboardType="numeric"
-                placeholder={getTodayISO()}
-                placeholderTextColor={colors.textDim}
-              />
-            </View>
+            <Text style={styles.modalLabel}>Fecha</Text>
+            <DateInput value={payDate} onChange={setPayDate} style={{ marginBottom: 12 }} />
 
             <Text style={styles.modalLabel}>Notas (opcional)</Text>
             <View style={styles.modalInputRow}>

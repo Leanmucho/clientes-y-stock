@@ -10,6 +10,7 @@ import { supabase } from '../../lib/supabase';
 import { Sale, SaleItem, Installment } from '../../types';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatDate, getStatusColor, getStatusLabel, getTodayISO, formatInputNumber } from '../../lib/utils';
+import { DateInput } from '../../components/DateInput';
 import { Loading } from '../../components/Loading';
 
 export default function SaleDetailScreen() {
@@ -383,18 +384,8 @@ export default function SaleDetailScreen() {
               </Text>
             </View>
 
-            <Text style={styles.modalLabel}>Fecha de vencimiento (AAAA-MM-DD)</Text>
-            <View style={styles.modalInputWrapper}>
-              <Ionicons name="calendar-outline" size={15} color={colors.textDim} />
-              <TextInput
-                style={[styles.modalInput, { marginLeft: 6 }]}
-                value={payDueDate}
-                onChangeText={setPayDueDate}
-                keyboardType="numeric"
-                placeholder="AAAA-MM-DD"
-                placeholderTextColor={colors.textDim}
-              />
-            </View>
+            <Text style={styles.modalLabel}>Fecha de vencimiento</Text>
+            <DateInput value={payDueDate} onChange={setPayDueDate} style={{ marginBottom: 12 }} />
 
             <Text style={styles.modalLabel}>Monto que pagó (dejar vacío para solo editar fecha)</Text>
             <View style={styles.modalInputWrapper}>
@@ -416,10 +407,8 @@ export default function SaleDetailScreen() {
 
             {payAmount !== '' && (
               <>
-                <Text style={styles.modalLabel}>Fecha de pago (AAAA-MM-DD)</Text>
-                <View style={styles.modalInputWrapper}>
-                  <TextInput style={styles.modalInput} value={payDate} onChangeText={setPayDate} keyboardType="numeric" placeholder={getTodayISO()} placeholderTextColor={colors.textDim} />
-                </View>
+                <Text style={styles.modalLabel}>Fecha de pago</Text>
+                <DateInput value={payDate} onChange={setPayDate} style={{ marginBottom: 12 }} />
               </>
             )}
 
