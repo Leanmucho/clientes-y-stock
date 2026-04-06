@@ -10,6 +10,7 @@ import { markOverdueInstallments } from '../../lib/database';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatDate, getStatusColor, getStatusLabel } from '../../lib/utils';
 import { Loading } from '../../components/Loading';
+import { DateInput } from '../../components/DateInput';
 
 type PendingItem = {
   id: number;
@@ -93,14 +94,6 @@ export default function CobrosScreen() {
 
   const isValidDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(new Date(d).getTime());
 
-  // Auto-format date input as YYYY-MM-DD
-  const formatDateInput = (raw: string): string => {
-    const digits = raw.replace(/\D/g, '').slice(0, 8);
-    if (digits.length <= 4) return digits;
-    if (digits.length <= 6) return `${digits.slice(0, 4)}-${digits.slice(4)}`;
-    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
-  };
-
   const filtered = items.filter((i) => {
     const matchesTab = tab === 'hoy' ? i.due_date <= today : true;
     const matchesDate = tab === 'fecha' && isValidDate(dateFilter) ? i.due_date === dateFilter : true;
@@ -183,26 +176,12 @@ export default function CobrosScreen() {
 
       {/* Date filter input */}
       {tab === 'fecha' && (
-        <View style={styles.dateFilterRow}>
-          <Ionicons name="calendar-outline" size={16} color={colors.textDim} />
-          <TextInput
-            style={styles.dateFilterInput}
-            placeholder="AAAA-MM-DD"
-            placeholderTextColor={colors.textDim}
-            value={dateFilter}
-            onChangeText={(raw) => setDateFilter(formatDateInput(raw))}
-            keyboardType="numeric"
-            maxLength={10}
-          />
-          {isValidDate(dateFilter) && (
-            <Ionicons name="checkmark-circle" size={16} color={colors.success} />
-          )}
-          {dateFilter.length > 0 && (
-            <TouchableOpacity onPress={() => setDateFilter('')}>
-              <Ionicons name="close-circle" size={16} color={colors.textDim} />
-            </TouchableOpacity>
-          )}
-        </View>
+        <DateInput
+          value={dateFilter}
+          onChange={setDateFilter}
+          placeholder="Seleccioná una fecha"
+          style={{ marginHorizontal: 12, marginBottom: 6 }}
+        />
       )}
 
       {/* Search */}
@@ -325,13 +304,6 @@ const styles = StyleSheet.create({
   tabBtnActive: { backgroundColor: colors.primary },
   tabBtnText: { fontSize: 13, fontWeight: '600', color: colors.textDim },
   tabBtnTextActive: { color: colors.white },
-  dateFilterRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: colors.surface, marginHorizontal: 12, marginBottom: 6,
-    borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10,
-    borderWidth: 1, borderColor: colors.primary + '44',
-  },
-  dateFilterInput: { flex: 1, color: colors.text, fontSize: 15, fontWeight: '600' },
   searchBox: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: colors.surface, marginHorizontal: 12, marginBottom: 6,
