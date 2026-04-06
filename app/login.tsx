@@ -12,7 +12,7 @@ async function reportFailedLogin(email: string) {
     // Use fetch directly with anon key — works even when user is not authenticated
     const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-    await fetch(`${supabaseUrl}/functions/v1/security-alert`, {
+    await fetch(`${supabaseUrl}/functions/v1/resend-email`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
