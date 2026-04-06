@@ -1,5 +1,21 @@
 import { useEffect, useState, useRef } from 'react';
-import { View, PanResponder, Animated, Dimensions } from 'react-native';
+import { View, PanResponder, Animated, Dimensions, Platform } from 'react-native';
+
+async function reportLoginEvent(type: 'success' | 'failed', email: string, userId?: string) {
+  try {
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    await fetch(`${supabaseUrl}/functions/v1/resend-email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseAnonKey ?? '',
+        'Authorization': `Bearer ${supabaseAnonKey}`,
+      },
+      body: JSON.stringify({ type, email, userId, timestamp: new Date().toISOString(), platform: Platform.OS }),
+    });
+  } catch {}
+}
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 import { Stack, useRouter, useSegments, usePathname } from 'expo-router';
@@ -105,8 +121,10 @@ export default function RootLayout() {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
-        // Limpiar caché al cerrar sesión — evita que el próximo usuario vea datos del anterior
         cacheClear();
+      }
+      if (event === 'SIGNED_IN' && session?.user?.email) {
+        reportLoginEvent('success', session.user.email, session.user.id);
       }
       setSession(session);
       if (session) initDatabase();
