@@ -9,12 +9,21 @@ import { colors } from '../lib/colors';
 
 async function reportFailedLogin(email: string) {
   try {
-    await supabase.functions.invoke('security-alert', {
-      body: {
+    // Use fetch directly with anon key — works even when user is not authenticated
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    await fetch(`${supabaseUrl}/functions/v1/security-alert`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseAnonKey ?? '',
+        'Authorization': `Bearer ${supabaseAnonKey}`,
+      },
+      body: JSON.stringify({
         email,
         timestamp: new Date().toISOString(),
         platform: Platform.OS,
-      },
+      }),
     });
   } catch {
     // Fire-and-forget — never block the UI
