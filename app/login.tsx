@@ -7,6 +7,20 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase';
 import { colors } from '../lib/colors';
 
+async function reportFailedLogin(email: string) {
+  try {
+    await supabase.functions.invoke('security-alert', {
+      body: {
+        email,
+        timestamp: new Date().toISOString(),
+        platform: Platform.OS,
+      },
+    });
+  } catch {
+    // Fire-and-forget — never block the UI
+  }
+}
+
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -25,6 +39,7 @@ export default function LoginScreen() {
     setLoading(false);
     if (error) {
       Alert.alert('Acceso denegado', 'Email o contraseña incorrectos.');
+      reportFailedLogin(email.trim().toLowerCase());
     }
   };
 

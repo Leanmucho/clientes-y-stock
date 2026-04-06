@@ -24,7 +24,7 @@ type PendingItem = {
   product_name: string;
 };
 
-type TabKey = 'hoy' | 'todos';
+type TabKey = 'hoy' | 'todos' | 'fecha';
 
 async function fetchPending(): Promise<PendingItem[]> {
   const today = new Date().toISOString().split('T')[0];
@@ -60,6 +60,7 @@ export default function CobrosScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<TabKey>('hoy');
   const [search, setSearch] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
 
   const load = useCallback(async () => {
     await markOverdueInstallments();
@@ -90,13 +91,24 @@ export default function CobrosScreen() {
 
   const today = new Date().toISOString().split('T')[0];
 
+  const isValidDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(new Date(d).getTime());
+
+  // Auto-format date input as YYYY-MM-DD
+  const formatDateInput = (raw: string): string => {
+    const digits = raw.replace(/\D/g, '').slice(0, 8);
+    if (digits.length <= 4) return digits;
+    if (digits.length <= 6) return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
+  };
+
   const filtered = items.filter((i) => {
     const matchesTab = tab === 'hoy' ? i.due_date <= today : true;
+    const matchesDate = tab === 'fecha' && isValidDate(dateFilter) ? i.due_date === dateFilter : true;
     const q = search.toLowerCase();
     const matchesSearch = !q ||
       i.client_name.toLowerCase().includes(q) ||
       i.product_name.toLowerCase().includes(q);
-    return matchesTab && matchesSearch;
+    return matchesTab && matchesDate && matchesSearch;
   });
 
   // Group by due_date for "todos" tab, flat for "hoy"
@@ -108,6 +120,13 @@ export default function CobrosScreen() {
     const overdueItems = filtered.filter(i => i.due_date < today);
     if (overdueItems.length > 0) sections.push({ title: `Vencidas anteriores (${overdueItems.length})`, data: overdueItems });
     if (todayItems.length > 0) sections.push({ title: `Hoy — ${formatDate(today)} (${todayItems.length})`, data: todayItems });
+  } else if (tab === 'fecha') {
+    if (isValidDate(dateFilter)) {
+      if (filtered.length > 0) {
+        const total = filtered.reduce((acc, i) => acc + (i.expected_amount - i.paid_amount), 0);
+        sections.push({ title: `${formatDate(dateFilter)} — ${formatCurrency(total)} pendiente`, data: filtered });
+      }
+    }
   } else {
     // Group by month
     const byMonth: Record<string, PendingItem[]> = {};
@@ -139,7 +158,7 @@ export default function CobrosScreen() {
         >
           <Ionicons name="today" size={15} color={tab === 'hoy' ? colors.white : colors.textDim} />
           <Text style={[styles.tabBtnText, tab === 'hoy' && styles.tabBtnTextActive]}>
-            Cobros de hoy {countToday > 0 ? `(${countToday})` : ''}
+            Hoy {countToday > 0 ? `(${countToday})` : ''}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -151,7 +170,40 @@ export default function CobrosScreen() {
             Todos ({countAll})
           </Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tabBtn, tab === 'fecha' && styles.tabBtnActive]}
+          onPress={() => setTab('fecha')}
+        >
+          <Ionicons name="calendar" size={15} color={tab === 'fecha' ? colors.white : colors.textDim} />
+          <Text style={[styles.tabBtnText, tab === 'fecha' && styles.tabBtnTextActive]}>
+            Por fecha
+          </Text>
+        </TouchableOpacity>
       </View>
+
+      {/* Date filter input */}
+      {tab === 'fecha' && (
+        <View style={styles.dateFilterRow}>
+          <Ionicons name="calendar-outline" size={16} color={colors.textDim} />
+          <TextInput
+            style={styles.dateFilterInput}
+            placeholder="AAAA-MM-DD"
+            placeholderTextColor={colors.textDim}
+            value={dateFilter}
+            onChangeText={(raw) => setDateFilter(formatDateInput(raw))}
+            keyboardType="numeric"
+            maxLength={10}
+          />
+          {isValidDate(dateFilter) && (
+            <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+          )}
+          {dateFilter.length > 0 && (
+            <TouchableOpacity onPress={() => setDateFilter('')}>
+              <Ionicons name="close-circle" size={16} color={colors.textDim} />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
 
       {/* Search */}
       <View style={styles.searchBox}>
@@ -189,12 +241,22 @@ export default function CobrosScreen() {
         stickySectionHeadersEnabled={true}
         ListEmptyComponent={
           <View style={styles.emptyCard}>
-            <Ionicons name="checkmark-circle" size={52} color={colors.success} />
+            <Ionicons
+              name={tab === 'fecha' && !isValidDate(dateFilter) ? 'calendar-outline' : 'checkmark-circle'}
+              size={52}
+              color={tab === 'fecha' && !isValidDate(dateFilter) ? colors.textDim : colors.success}
+            />
             <Text style={styles.emptyTitle}>
-              {tab === 'hoy' ? '¡Sin cobros para hoy!' : 'Sin cuotas pendientes'}
+              {tab === 'hoy' ? '¡Sin cobros para hoy!' :
+               tab === 'fecha' && !isValidDate(dateFilter) ? 'Ingresá una fecha' :
+               tab === 'fecha' ? 'Sin cobros ese día' :
+               'Sin cuotas pendientes'}
             </Text>
             <Text style={styles.emptySubtitle}>
-              {tab === 'hoy' ? 'No hay cuotas para hoy ni vencidas' : 'Todos los clientes están al día'}
+              {tab === 'hoy' ? 'No hay cuotas para hoy ni vencidas' :
+               tab === 'fecha' && !isValidDate(dateFilter) ? 'Escribí la fecha en formato AAAA-MM-DD para filtrar' :
+               tab === 'fecha' ? 'No hay cuotas pendientes para esa fecha' :
+               'Todos los clientes están al día'}
             </Text>
           </View>
         }
@@ -263,6 +325,13 @@ const styles = StyleSheet.create({
   tabBtnActive: { backgroundColor: colors.primary },
   tabBtnText: { fontSize: 13, fontWeight: '600', color: colors.textDim },
   tabBtnTextActive: { color: colors.white },
+  dateFilterRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: colors.surface, marginHorizontal: 12, marginBottom: 6,
+    borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10,
+    borderWidth: 1, borderColor: colors.primary + '44',
+  },
+  dateFilterInput: { flex: 1, color: colors.text, fontSize: 15, fontWeight: '600' },
   searchBox: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: colors.surface, marginHorizontal: 12, marginBottom: 6,

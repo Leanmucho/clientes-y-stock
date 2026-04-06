@@ -2,7 +2,12 @@ import { useCallback, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   RefreshControl, TextInput, Linking, Alert, Modal, Share, Platform,
+  LayoutAnimation, UIManager,
 } from 'react-native';
+
+if (Platform.OS === 'android') {
+  UIManager.setLayoutAnimationEnabledExperimental?.(true);
+}
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { getClientsByZone, getTodayPendingByZone } from '../../lib/database';
@@ -50,6 +55,7 @@ interface RouteStop {
   address?: string;
   phone?: string;
   amount?: number;
+  notes?: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -71,9 +77,13 @@ function buildShareMessage(stops: RouteStop[]): string {
   const total = stops.reduce((acc, s) => acc + (s.amount ?? 0), 0);
   const lines = stops.map((s, idx) => {
     const parts = [`${idx + 1}. ${s.clientName}`];
-    if (s.address) parts.push(`   📍 ${s.address}`);
+    if (s.address) {
+      parts.push(`   📍 ${s.address}`);
+      parts.push(`   🗺️ https://maps.google.com/?q=${encodeURIComponent(s.address)}`);
+    }
     if (s.phone) parts.push(`   📱 ${s.phone}`);
     if (s.amount) parts.push(`   💰 ${formatCurrency(s.amount)}`);
+    if (s.notes) parts.push(`   📝 ${s.notes}`);
     return parts.join('\n');
   });
   return [
@@ -145,8 +155,14 @@ export default function RutasScreen() {
     Linking.openURL(url).catch(() => Alert.alert('Error', 'No se pudo abrir Google Maps.'));
   };
 
-  const toggle = (key: string) =>
+  const toggle = (key: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const updateStopNotes = (id: string, notes: string) => {
+    setRouteStops(prev => prev.map(s => s.id === id ? { ...s, notes } : s));
+  };
 
   // ── Route stop helpers ──────────────────────────────────────────────────────
 
@@ -518,40 +534,57 @@ export default function RutasScreen() {
               <Text style={styles.modalSubtitle}>Total a cobrar: {formatCurrency(routeTotal)}</Text>
             )}
 
-            <ScrollView style={{ maxHeight: 360 }} showsVerticalScrollIndicator={false}>
+            <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
               {routeStops.map((stop, idx) => (
                 <View key={stop.id} style={styles.stopCard}>
-                  <View style={styles.stopBadge}>
-                    <Text style={styles.stopBadgeText}>{idx + 1}</Text>
+                  <View style={styles.stopRow}>
+                    <View style={styles.stopBadge}>
+                      <Text style={styles.stopBadgeText}>{idx + 1}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.stopName}>{stop.clientName}</Text>
+                      {stop.address ? (
+                        <TouchableOpacity
+                          style={styles.stopAddressRow}
+                          onPress={() => Linking.openURL(`https://maps.google.com/?q=${encodeURIComponent(stop.address!)}`).catch(() => {})}
+                        >
+                          <Ionicons name="location-outline" size={12} color={colors.primary} />
+                          <Text style={styles.stopAddress} numberOfLines={1}>{stop.address}</Text>
+                          <Ionicons name="open-outline" size={11} color={colors.primary} />
+                        </TouchableOpacity>
+                      ) : null}
+                      {stop.phone ? (
+                        <Text style={styles.stopPhone}>📱 {stop.phone}</Text>
+                      ) : null}
+                      {stop.amount ? (
+                        <Text style={styles.stopAmount}>💰 {formatCurrency(stop.amount)}</Text>
+                      ) : null}
+                    </View>
+                    <View style={styles.reorderBtns}>
+                      <TouchableOpacity
+                        style={[styles.reorderBtn, idx === 0 && styles.reorderBtnDisabled]}
+                        onPress={() => moveStop(idx, -1)}
+                        disabled={idx === 0}
+                      >
+                        <Ionicons name="chevron-up" size={16} color={idx === 0 ? colors.textDim : colors.primary} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.reorderBtn, idx === routeStops.length - 1 && styles.reorderBtnDisabled]}
+                        onPress={() => moveStop(idx, 1)}
+                        disabled={idx === routeStops.length - 1}
+                      >
+                        <Ionicons name="chevron-down" size={16} color={idx === routeStops.length - 1 ? colors.textDim : colors.primary} />
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.stopName}>{stop.clientName}</Text>
-                    {stop.address ? (
-                      <Text style={styles.stopAddress} numberOfLines={1}>📍 {stop.address}</Text>
-                    ) : null}
-                    {stop.phone ? (
-                      <Text style={styles.stopPhone}>📱 {stop.phone}</Text>
-                    ) : null}
-                    {stop.amount ? (
-                      <Text style={styles.stopAmount}>💰 {formatCurrency(stop.amount)}</Text>
-                    ) : null}
-                  </View>
-                  <View style={styles.reorderBtns}>
-                    <TouchableOpacity
-                      style={[styles.reorderBtn, idx === 0 && styles.reorderBtnDisabled]}
-                      onPress={() => moveStop(idx, -1)}
-                      disabled={idx === 0}
-                    >
-                      <Ionicons name="chevron-up" size={16} color={idx === 0 ? colors.textDim : colors.primary} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.reorderBtn, idx === routeStops.length - 1 && styles.reorderBtnDisabled]}
-                      onPress={() => moveStop(idx, 1)}
-                      disabled={idx === routeStops.length - 1}
-                    >
-                      <Ionicons name="chevron-down" size={16} color={idx === routeStops.length - 1 ? colors.textDim : colors.primary} />
-                    </TouchableOpacity>
-                  </View>
+                  <TextInput
+                    style={styles.stopNotes}
+                    placeholder="Indicaciones para el repartidor..."
+                    placeholderTextColor={colors.textDim}
+                    value={stop.notes ?? ''}
+                    onChangeText={(text) => updateStopNotes(stop.id, text)}
+                    multiline
+                  />
                 </View>
               ))}
             </ScrollView>
@@ -712,18 +745,24 @@ const styles = StyleSheet.create({
 
   // Stop cards
   stopCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: colors.bg, borderRadius: 12, padding: 12, marginBottom: 8,
   },
+  stopRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   stopBadge: {
     width: 30, height: 30, borderRadius: 15,
     backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center',
   },
   stopBadgeText: { fontSize: 13, fontWeight: '800', color: colors.white },
   stopName: { fontSize: 14, fontWeight: '700', color: colors.text, marginBottom: 2 },
-  stopAddress: { fontSize: 12, color: colors.textMuted, marginBottom: 1 },
+  stopAddressRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginBottom: 1 },
+  stopAddress: { fontSize: 12, color: colors.primary, flex: 1 },
   stopPhone: { fontSize: 12, color: colors.textMuted, marginBottom: 1 },
   stopAmount: { fontSize: 12, color: colors.success, fontWeight: '700' },
+  stopNotes: {
+    marginTop: 8, marginLeft: 40, fontSize: 12, color: colors.text,
+    backgroundColor: colors.surface, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
+    borderWidth: 1, borderColor: colors.border, minHeight: 32,
+  },
 
   // Reorder
   reorderBtns: { gap: 2 },

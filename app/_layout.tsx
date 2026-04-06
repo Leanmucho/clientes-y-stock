@@ -1,5 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
-import { View, PanResponder } from 'react-native';
+import { View, PanResponder, Animated, Dimensions } from 'react-native';
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
 import { Stack, useRouter, useSegments, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -33,6 +35,8 @@ export default function RootLayout() {
   const showTabBarRef = useRef(false);
   const currentTabIdxRef = useRef(0);
   const navigateRef = useRef<(path: string) => void>(() => {});
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const isAnimating = useRef(false);
 
   useEffect(() => {
     navigateRef.current = (path: string) => router.navigate(path as any);
@@ -49,15 +53,44 @@ export default function RootLayout() {
       // Only claim gesture if horizontal swipe is dominant
       onMoveShouldSetPanResponder: (_, g) =>
         showTabBarRef.current &&
-        Math.abs(g.dx) > 20 &&
-        Math.abs(g.dx) > Math.abs(g.dy) * 2,
+        !isAnimating.current &&
+        Math.abs(g.dx) > 15 &&
+        Math.abs(g.dx) > Math.abs(g.dy) * 2.5,
+      onPanResponderMove: (_, g) => {
+        // Resist drag: move at 30% of finger speed so it feels elastic
+        slideAnim.setValue(g.dx * 0.3);
+      },
       onPanResponderTerminationRequest: () => true,
       onPanResponderRelease: (_, g) => {
         const idx = currentTabIdxRef.current;
-        if (g.dx < -60 && idx < SWIPE_TABS.length - 1) {
-          navigateRef.current(SWIPE_TABS[idx + 1]);
-        } else if (g.dx > 60 && idx > 0) {
-          navigateRef.current(SWIPE_TABS[idx - 1]);
+        const shouldNavigate =
+          (g.dx < -60 && idx < SWIPE_TABS.length - 1) ||
+          (g.dx > 60 && idx > 0);
+
+        if (shouldNavigate) {
+          isAnimating.current = true;
+          const toValue = g.dx < 0 ? -SCREEN_WIDTH * 0.3 : SCREEN_WIDTH * 0.3;
+          Animated.timing(slideAnim, {
+            toValue,
+            duration: 180,
+            useNativeDriver: true,
+          }).start(() => {
+            slideAnim.setValue(0);
+            isAnimating.current = false;
+            if (g.dx < 0) {
+              navigateRef.current(SWIPE_TABS[idx + 1]);
+            } else {
+              navigateRef.current(SWIPE_TABS[idx - 1]);
+            }
+          });
+        } else {
+          // Snap back with spring
+          Animated.spring(slideAnim, {
+            toValue: 0,
+            useNativeDriver: true,
+            tension: 120,
+            friction: 8,
+          }).start();
         }
       },
     })
@@ -101,7 +134,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <View style={{ flex: 1, backgroundColor: colors.bg }} {...panResponder.panHandlers}>
         <StatusBar style="light" />
-        <View style={{ flex: 1 }}>
+        <Animated.View style={{ flex: 1, transform: [{ translateX: slideAnim }] }}>
           <Stack
             screenOptions={{
               headerStyle: { backgroundColor: colors.surface },
@@ -127,7 +160,7 @@ export default function RootLayout() {
             <Stack.Screen name="equipo" options={{ title: 'Equipo' }} />
             <Stack.Screen name="reportes" options={{ title: 'Reportes y Análisis' }} />
           </Stack>
-        </View>
+        </Animated.View>
         {showTabBar && <BottomTabBar />}
       </View>
     </SafeAreaProvider>
