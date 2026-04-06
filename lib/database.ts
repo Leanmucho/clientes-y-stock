@@ -38,20 +38,20 @@ export async function getClient(id: number): Promise<Client | null> {
 export async function createClient(data: Omit<Client, 'id' | 'created_at'>): Promise<number> {
   const user_id = await getUserId();
   const { data: row, error } = await supabase.from('clients').insert({ ...data, user_id }).select('id').single();
-  if (error) throw new Error(`Error al guardar cliente: ${error.message}`);
+  if (error) throw new Error('No se pudo guardar el cliente. Intentá nuevamente.');
   cacheInvalidate('clients');
   return (row as any).id;
 }
 
 export async function updateClient(id: number, data: Omit<Client, 'id' | 'created_at'>) {
   const { error } = await supabase.from('clients').update(data).eq('id', id);
-  if (error) throw new Error(`Error al actualizar cliente: ${error.message}`);
+  if (error) throw new Error('No se pudo actualizar el cliente. Intentá nuevamente.');
   cacheInvalidate('clients', `client-${id}`);
 }
 
 export async function deleteClient(id: number) {
   const { error } = await supabase.from('clients').delete().eq('id', id);
-  if (error) throw new Error(`Error al eliminar cliente: ${error.message}`);
+  if (error) throw new Error('No se pudo eliminar el cliente. Verificá que no tenga ventas activas.');
   cacheInvalidate('clients', `client-${id}`);
   cacheInvalidatePrefix(`sales-client-${id}`);
 }
@@ -74,7 +74,7 @@ export async function getProduct(id: number): Promise<Product | null> {
 export async function createProduct(data: Omit<Product, 'id' | 'created_at'>): Promise<number> {
   const user_id = await getUserId();
   const { data: row, error } = await supabase.from('products').insert({ ...data, user_id }).select('id').single();
-  if (error) throw new Error(`Error al guardar producto: ${error.message}`);
+  if (error) throw new Error('No se pudo guardar el producto. Intentá nuevamente.');
   cacheInvalidate('products');
   return (row as any).id;
 }
@@ -92,6 +92,9 @@ export async function deleteProduct(id: number) {
 }
 
 export async function adjustStock(productId: number, delta: number) {
+  // Validación client-side antes de llamar al RPC
+  if (!Number.isInteger(productId) || productId <= 0) throw new Error('ID de producto inválido.');
+  if (!Number.isFinite(delta) || Math.abs(delta) > 100_000) throw new Error('Ajuste de stock fuera de rango.');
   await supabase.rpc('adjust_stock', { product_id: productId, delta });
 }
 
@@ -144,14 +147,14 @@ export async function createSale(
   };
 
   const { data: row, error } = await supabase.from('sales').insert(payload).select('id').single();
-  if (error) throw new Error(`Error al guardar la venta: ${error.message}`);
+  if (error) throw new Error('No se pudo registrar la venta. Intentá nuevamente.');
   const saleId = (row as any).id;
 
   if (items.length > 0) {
     const { error: itemsError } = await supabase
       .from('sale_items')
       .insert(items.map(it => ({ ...it, sale_id: saleId, user_id })));
-    if (itemsError) throw new Error(`Error al guardar los productos: ${itemsError.message}`);
+    if (itemsError) throw new Error('No se pudieron guardar los productos de la venta.');
 
     for (const it of items) {
       if (it.product_id) {
@@ -210,7 +213,7 @@ export async function registerAdvancePayment(
   const { error } = await supabase.from('client_payments').insert({
     client_id: clientId, amount, date, notes, user_id,
   });
-  if (error) throw new Error(`Error al registrar pago: ${error.message}`);
+  if (error) throw new Error('No se pudo registrar el pago. Intentá nuevamente.');
 
   const { data: sales } = await supabase.from('sales').select('id').eq('client_id', clientId);
   const saleIds = (sales ?? []).map((s: any) => s.id);
@@ -261,7 +264,7 @@ export async function getInstallmentsBySale(saleId: number): Promise<Installment
 export async function createInstallments(installments: Omit<Installment, 'id'>[]) {
   const user_id = await getUserId();
   const { error } = await supabase.from('installments').insert(installments.map(i => ({ ...i, user_id })));
-  if (error) throw new Error(`Error al crear cuotas: ${error.message}`);
+  if (error) throw new Error('No se pudieron crear las cuotas. Intentá nuevamente.');
 }
 
 export async function registerPayment(

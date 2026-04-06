@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   Alert, KeyboardAvoidingView, Platform, ActivityIndicator,
@@ -7,9 +7,28 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase';
 import { colors } from '../lib/colors';
 
+// ─── Rate limiter: max 5 intentos por 10 minutos por dispositivo ─────────────
+const loginAttempts: { count: number; firstAt: number } = { count: 0, firstAt: 0 };
+const MAX_ATTEMPTS = 5;
+const WINDOW_MS = 10 * 60 * 1000; // 10 minutos
+
+function checkRateLimit(): { blocked: boolean; waitSecs: number } {
+  const now = Date.now();
+  if (now - loginAttempts.firstAt > WINDOW_MS) {
+    loginAttempts.count = 0;
+    loginAttempts.firstAt = now;
+  }
+  loginAttempts.count++;
+  if (loginAttempts.count > MAX_ATTEMPTS) {
+    const waitSecs = Math.ceil((WINDOW_MS - (now - loginAttempts.firstAt)) / 1000);
+    return { blocked: true, waitSecs };
+  }
+  return { blocked: false, waitSecs: 0 };
+}
+
+// ─── Alerta de seguridad (fire-and-forget) ────────────────────────────────────
 async function reportFailedLogin(email: string) {
   try {
-    // Use fetch directly with anon key — works even when user is not authenticated
     const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     await fetch(`${supabaseUrl}/functions/v1/resend-email`, {
@@ -26,7 +45,7 @@ async function reportFailedLogin(email: string) {
       }),
     });
   } catch {
-    // Fire-and-forget — never block the UI
+    // Fire-and-forget — nunca bloquea la UI
   }
 }
 
@@ -35,20 +54,51 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [failCount, setFailCount] = useState(0);
 
   const handleLogin = async () => {
-    if (!email.trim() || !password) {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password) {
       return Alert.alert('Requerido', 'Ingresá email y contraseña.');
     }
+
+    // Validación básica de formato de email
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return Alert.alert('Email inválido', 'Ingresá un email con formato válido.');
+    }
+
+    // Rate limit client-side
+    const { blocked, waitSecs } = checkRateLimit();
+    if (blocked) {
+      const mins = Math.ceil(waitSecs / 60);
+      return Alert.alert(
+        '⛔ Demasiados intentos',
+        `Demasiados intentos fallidos. Esperá ${mins} minuto${mins !== 1 ? 's' : ''} antes de intentar nuevamente.`
+      );
+    }
+
     setLoading(true);
     const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
+      email: cleanEmail,
       password,
     });
     setLoading(false);
+
     if (error) {
-      Alert.alert('Acceso denegado', 'Email o contraseña incorrectos.');
-      reportFailedLogin(email.trim().toLowerCase());
+      const newCount = failCount + 1;
+      setFailCount(newCount);
+
+      // Mensaje genérico — no revela si el email existe o no
+      Alert.alert(
+        'Acceso denegado',
+        newCount >= 3
+          ? 'Credenciales incorrectas. Si olvidaste tu contraseña, contactá al administrador.'
+          : 'Email o contraseña incorrectos.'
+      );
+
+      reportFailedLogin(cleanEmail);
+    } else {
+      setFailCount(0);
     }
   };
 
@@ -102,6 +152,15 @@ export default function LoginScreen() {
             </TouchableOpacity>
           </View>
 
+          {failCount >= 3 && (
+            <View style={styles.warningBox}>
+              <Ionicons name="warning-outline" size={14} color={colors.warning} />
+              <Text style={styles.warningText}>
+                {MAX_ATTEMPTS - loginAttempts.count} intento{MAX_ATTEMPTS - loginAttempts.count !== 1 ? 's' : ''} restante{MAX_ATTEMPTS - loginAttempts.count !== 1 ? 's' : ''} antes del bloqueo temporal
+              </Text>
+            </View>
+          )}
+
           <TouchableOpacity
             style={[styles.button, loading && { opacity: 0.6 }]}
             onPress={handleLogin}
@@ -130,7 +189,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   appName: { fontSize: 26, fontWeight: '800', color: colors.text, marginBottom: 4 },
-  bizName: { fontSize: 14, color: colors.textMuted, fontWeight: '500' },
   card: { backgroundColor: colors.surface, borderRadius: 20, padding: 24 },
   cardTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 20 },
   label: { fontSize: 12, fontWeight: '600', color: colors.textMuted, marginBottom: 6, marginLeft: 2 },
@@ -141,6 +199,13 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border, gap: 10,
   },
   input: { flex: 1, color: colors.text, fontSize: 15 },
+  warningBox: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: colors.warning + '18', borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 7, marginTop: 10,
+    borderWidth: 1, borderColor: colors.warning + '44',
+  },
+  warningText: { fontSize: 11, color: colors.warning, flex: 1 },
   button: {
     backgroundColor: colors.primary, borderRadius: 12,
     paddingVertical: 15, alignItems: 'center',
