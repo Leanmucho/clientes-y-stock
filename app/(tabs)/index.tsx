@@ -2,7 +2,11 @@ import { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getDashboardStats, getTodayInstallments, getMonthlyStats, getMonthlyExpenseStats } from '../../lib/database';
+import {
+  getDashboardStats, getTodayInstallments, getMonthlyStats,
+  getMonthlyExpenseStats, markOverdueInstallments, getLowStockProducts,
+} from '../../lib/database';
+import { Product } from '../../types';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatDate, getStatusColor, getStatusLabel } from '../../lib/utils';
 import { Loading } from '../../components/Loading';
@@ -11,10 +15,14 @@ type FilterStatus = 'all' | 'overdue' | 'pending' | 'partial';
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const [stats, setStats] = useState({ totalClients: 0, overdueCount: 0, todayCount: 0, monthlyCollected: 0, lowStockCount: 0 });
+  const [stats, setStats] = useState({
+    totalClients: 0, overdueCount: 0, todayCount: 0,
+    monthlyCollected: 0, lowStockCount: 0, monthlySales: 0, todaySales: 0,
+  });
   const [pending, setPending] = useState<any[]>([]);
   const [monthly, setMonthly] = useState<{ month: string; collected: number }[]>([]);
   const [monthlyExp, setMonthlyExp] = useState<{ month: string; amount: number }[]>([]);
+  const [lowStockProducts, setLowStockProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<FilterStatus>('all');
@@ -22,25 +30,34 @@ export default function DashboardScreen() {
 
   const load = useCallback(async () => {
     const today = new Date().toISOString().split('T')[0];
-    const [s, p, m, me] = await Promise.all([getDashboardStats(), getTodayInstallments(), getMonthlyStats(), getMonthlyExpenseStats()]);
+    await markOverdueInstallments();
+    const [s, p, m, me, lsp] = await Promise.all([
+      getDashboardStats(), getTodayInstallments(), getMonthlyStats(),
+      getMonthlyExpenseStats(), getLowStockProducts(),
+    ]);
     const corrected = p.map((i: any) =>
       i.status === 'pending' && i.due_date < today ? { ...i, status: 'overdue' } : i
     );
-    setStats(s); setPending(corrected); setMonthly(m); setMonthlyExp(me); setLoading(false);
+    setStats(s); setPending(corrected); setMonthly(m); setMonthlyExp(me);
+    setLowStockProducts(lsp); setLoading(false);
   }, []);
 
   useFocusEffect(useCallback(() => {
     let active = true;
     setLoading(true);
     const today = new Date().toISOString().split('T')[0];
-    Promise.all([getDashboardStats(), getTodayInstallments(), getMonthlyStats(), getMonthlyExpenseStats()])
-      .then(([s, p, m, me]) => {
+    markOverdueInstallments()
+      .then(() => Promise.all([
+        getDashboardStats(), getTodayInstallments(), getMonthlyStats(),
+        getMonthlyExpenseStats(), getLowStockProducts(),
+      ]))
+      .then(([s, p, m, me, lsp]) => {
         if (!active) return;
-        // Corrección cliente-side: si due_date ya pasó y DB todavía dice 'pending', tratar como overdue
         const corrected = p.map((i: any) =>
           i.status === 'pending' && i.due_date < today ? { ...i, status: 'overdue' } : i
         );
-        setStats(s); setPending(corrected); setMonthly(m); setMonthlyExp(me); setLoading(false);
+        setStats(s); setPending(corrected); setMonthly(m); setMonthlyExp(me);
+        setLowStockProducts(lsp); setLoading(false);
       })
       .catch(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -53,7 +70,6 @@ export default function DashboardScreen() {
   if (loading) return <Loading />;
 
   const filtered = filter === 'all' ? pending : pending.filter(i => i.status === filter);
-
   const maxMonthly = Math.max(...monthly.map(m => m.collected), 1);
   const thisMonth = new Date().toISOString().substring(0, 7);
   const monthlyExpTotal = monthlyExp.find(m => m.month === thisMonth)?.amount ?? 0;
@@ -67,45 +83,48 @@ export default function DashboardScreen() {
   ];
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+    >
 
-      {/* Stats */}
+      {/* Row 1: Clients · Por cobrar · Vencidas */}
       <View style={styles.statsRow}>
         <TouchableOpacity style={styles.statCardBtn} onPress={() => router.push('/clients')} activeOpacity={0.7}>
           <StatCard icon="people" label="Clientes" value={stats.totalClients.toString()} color={colors.primary} />
         </TouchableOpacity>
         <TouchableOpacity style={styles.statCardBtn} onPress={() => router.push('/cobros')} activeOpacity={0.7}>
-          <StatCard icon="today" label="Cobros hoy" value={stats.todayCount.toString()} color={colors.warning} />
+          <StatCard icon="today" label="Por cobrar" value={stats.todayCount.toString()} color={colors.warning} />
         </TouchableOpacity>
         <TouchableOpacity style={styles.statCardBtn} onPress={() => router.push('/cobros')} activeOpacity={0.7}>
           <StatCard icon="alert-circle" label="Vencidas" value={stats.overdueCount.toString()} color={colors.danger} />
         </TouchableOpacity>
       </View>
 
-      {/* P&L row */}
-      <View style={styles.plRow}>
-        <TouchableOpacity style={[styles.plCard, { borderLeftColor: colors.success }]} onPress={() => setShowMonthly(v => !v)} activeOpacity={0.8}>
-          <Text style={styles.plLabel}>Cobrado</Text>
-          <Text style={[styles.plValue, { color: colors.success }]}>{formatCurrency(stats.monthlyCollected)}</Text>
+      {/* Row 2: Ventas del mes · Gastos del mes */}
+      <View style={styles.statsRow}>
+        <TouchableOpacity style={styles.statCardBtn} onPress={() => router.push('/reportes')} activeOpacity={0.7}>
+          <StatCard icon="cart" label="Ventas del mes" value={formatCurrency(stats.monthlySales)} color={colors.primary} small />
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.plCard, { borderLeftColor: colors.danger }]} onPress={() => router.push('/gastos')} activeOpacity={0.8}>
-          <Text style={styles.plLabel}>Gastos</Text>
-          <Text style={[styles.plValue, { color: colors.danger }]}>{formatCurrency(monthlyExpTotal)}</Text>
+        <TouchableOpacity style={styles.statCardBtn} onPress={() => router.push('/gastos')} activeOpacity={0.7}>
+          <StatCard icon="receipt" label="Gastos del mes" value={formatCurrency(monthlyExpTotal)} color={colors.danger} small />
         </TouchableOpacity>
       </View>
 
-      {/* Net card */}
-      <TouchableOpacity style={[styles.netCard, { borderLeftColor: netThisMonth >= 0 ? colors.success : colors.danger }]} onPress={() => router.push('/reportes')} activeOpacity={0.8}>
-        <Ionicons name={netThisMonth >= 0 ? 'trending-up' : 'trending-down'} size={18} color={netThisMonth >= 0 ? colors.success : colors.danger} />
-        <View style={{ flex: 1, marginLeft: 10 }}>
-          <Text style={styles.netLabel}>Resultado neto este mes</Text>
-          <Text style={[styles.netValue, { color: netThisMonth >= 0 ? colors.success : colors.danger }]}>
+      {/* P&L */}
+      <View style={styles.plRow}>
+        <TouchableOpacity style={[styles.plCard, { borderLeftColor: colors.success }]} onPress={() => setShowMonthly(v => !v)} activeOpacity={0.8}>
+          <Text style={styles.plLabel}>Cobrado este mes</Text>
+          <Text style={[styles.plValue, { color: colors.success }]}>{formatCurrency(stats.monthlyCollected)}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.plCard, { borderLeftColor: netThisMonth >= 0 ? colors.success : colors.danger }]} onPress={() => router.push('/reportes')} activeOpacity={0.8}>
+          <Text style={styles.plLabel}>Resultado neto</Text>
+          <Text style={[styles.plValue, { color: netThisMonth >= 0 ? colors.success : colors.danger }]}>
             {netThisMonth >= 0 ? '+' : ''}{formatCurrency(netThisMonth)}
           </Text>
-        </View>
-        <Ionicons name="bar-chart-outline" size={16} color={colors.textDim} />
-      </TouchableOpacity>
+        </TouchableOpacity>
+      </View>
 
       {/* Monthly chart */}
       {showMonthly && (
@@ -119,7 +138,7 @@ export default function DashboardScreen() {
           <View style={styles.chartBars}>
             {monthly.map((m) => {
               const ratio = m.collected / maxMonthly;
-              const monthLabel = m.month.substring(5); // MM
+              const monthLabel = m.month.substring(5);
               const isCurrentMonth = m.month === new Date().toISOString().substring(0, 7);
               return (
                 <View key={m.month} style={styles.barCol}>
@@ -127,11 +146,7 @@ export default function DashboardScreen() {
                     {m.collected > 0 ? `${Math.round(m.collected / 1000)}k` : ''}
                   </Text>
                   <View style={styles.barTrack}>
-                    <View style={[
-                      styles.barFill,
-                      { flex: ratio || 0.02 },
-                      isCurrentMonth && { backgroundColor: colors.success },
-                    ]} />
+                    <View style={[styles.barFill, { flex: ratio || 0.02 }, isCurrentMonth && { backgroundColor: colors.success }]} />
                     <View style={{ flex: 1 - (ratio || 0.02) }} />
                   </View>
                   <Text style={[styles.barLabel, isCurrentMonth && { color: colors.success, fontWeight: '700' }]}>
@@ -144,15 +159,45 @@ export default function DashboardScreen() {
         </View>
       )}
 
-      {stats.lowStockCount > 0 && (
-        <TouchableOpacity style={styles.lowStockAlert} onPress={() => router.push('/stock')} activeOpacity={0.8}>
-          <Ionicons name="warning" size={18} color={colors.warning} />
-          <Text style={styles.lowStockText}>{stats.lowStockCount} producto{stats.lowStockCount > 1 ? 's' : ''} con stock bajo</Text>
-          <Ionicons name="chevron-forward" size={16} color={colors.warning} />
-        </TouchableOpacity>
+      {/* Low stock products */}
+      {lowStockProducts.length > 0 && (
+        <>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionTitleRow}>
+              <Ionicons name="warning" size={15} color={colors.warning} />
+              <Text style={styles.sectionTitle}>Stock bajo</Text>
+            </View>
+            <TouchableOpacity onPress={() => router.push('/stock')} style={styles.seeAllBtn}>
+              <Text style={styles.seeAllText}>Ver todos</Text>
+              <Ionicons name="chevron-forward" size={13} color={colors.primary} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.lowStockRow}>
+            {lowStockProducts.map(p => {
+              const isEmpty = p.stock === 0;
+              const color = isEmpty ? colors.danger : colors.warning;
+              return (
+                <TouchableOpacity
+                  key={p.id}
+                  style={[styles.lowStockCard, { borderTopColor: color }]}
+                  onPress={() => router.push(`/product/${p.id}`)}
+                  activeOpacity={0.75}
+                >
+                  <View style={[styles.lowStockBadge, { backgroundColor: color + '22' }]}>
+                    <Text style={[styles.lowStockNum, { color }]}>{p.stock}</Text>
+                    <Text style={[styles.lowStockUnit, { color }]}>{isEmpty ? 'sin stock' : 'uds'}</Text>
+                  </View>
+                  <Text style={styles.lowStockName} numberOfLines={2}>{p.name}</Text>
+                  {p.category_name && <Text style={styles.lowStockCat}>{p.category_name}</Text>}
+                  <Text style={styles.lowStockMin}>Mín: {p.min_stock}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </>
       )}
 
-      {/* Filter + pending */}
+      {/* Pending installments */}
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>Pendiente de cobro</Text>
         {pending.length > 0 && (
@@ -183,8 +228,12 @@ export default function DashboardScreen() {
         </View>
       ) : (
         filtered.map((inst) => (
-          <TouchableOpacity key={inst.id} style={styles.installmentCard}
-            onPress={() => router.push(`/sale/${inst.sale_id}`)} activeOpacity={0.7}>
+          <TouchableOpacity
+            key={inst.id}
+            style={styles.installmentCard}
+            onPress={() => router.push(`/sale/${inst.sale_id}`)}
+            activeOpacity={0.7}
+          >
             <View style={[styles.statusDot, { backgroundColor: getStatusColor(inst.status) + '33' }]}>
               <View style={[styles.dot, { backgroundColor: getStatusColor(inst.status) }]} />
             </View>
@@ -205,11 +254,11 @@ export default function DashboardScreen() {
   );
 }
 
-function StatCard({ icon, label, value, color }: any) {
+function StatCard({ icon, label, value, color, small }: { icon: any; label: string; value: string; color: string; small?: boolean }) {
   return (
     <View style={[styles.statCard, { borderTopColor: color }]}>
       <Ionicons name={icon} size={22} color={color} />
-      <Text style={styles.statValue}>{value}</Text>
+      <Text style={[styles.statValue, small && { fontSize: 16 }]}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
@@ -218,18 +267,15 @@ function StatCard({ icon, label, value, color }: any) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 32 },
-  statsRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
+  statsRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
   statCardBtn: { flex: 1 },
-  statCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 14, padding: 14, alignItems: 'center', gap: 4, borderTopWidth: 3 },
-  statValue: { fontSize: 22, fontWeight: '800', color: colors.text },
-  statLabel: { fontSize: 11, color: colors.textMuted, fontWeight: '500' },
+  statCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 14, padding: 12, alignItems: 'center', gap: 4, borderTopWidth: 3 },
+  statValue: { fontSize: 20, fontWeight: '800', color: colors.text, textAlign: 'center' },
+  statLabel: { fontSize: 10, color: colors.textMuted, fontWeight: '500', textAlign: 'center' },
   plRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
   plCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 14, padding: 14, borderLeftWidth: 3 },
   plLabel: { fontSize: 11, color: colors.textMuted, fontWeight: '500', marginBottom: 4 },
-  plValue: { fontSize: 18, fontWeight: '800' },
-  netCard: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', marginBottom: 12, borderLeftWidth: 3 },
-  netLabel: { fontSize: 12, color: colors.textMuted, fontWeight: '500' },
-  netValue: { fontSize: 20, fontWeight: '800' },
+  plValue: { fontSize: 17, fontWeight: '800' },
   chartCard: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, marginBottom: 12 },
   chartTitle: { fontSize: 12, fontWeight: '600', color: colors.textMuted },
   chartBars: { flexDirection: 'row', alignItems: 'flex-end', height: 90, gap: 4 },
@@ -238,11 +284,23 @@ const styles = StyleSheet.create({
   barTrack: { width: '80%', flex: 1, flexDirection: 'column-reverse' },
   barFill: { backgroundColor: colors.primary + 'bb', borderRadius: 3 },
   barLabel: { fontSize: 9, color: colors.textDim, marginTop: 3 },
-  lowStockAlert: { backgroundColor: colors.warning + '22', borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16, borderWidth: 1, borderColor: colors.warning + '44' },
-  lowStockText: { flex: 1, color: colors.warning, fontWeight: '600', fontSize: 13 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, marginTop: 4 },
+  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
   sectionCount: { backgroundColor: colors.primary, color: colors.white, fontSize: 12, fontWeight: '700', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
+  seeAllBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  seeAllText: { fontSize: 12, color: colors.primary, fontWeight: '600' },
+  lowStockRow: { gap: 10, paddingBottom: 12 },
+  lowStockCard: {
+    backgroundColor: colors.surface, borderRadius: 14, padding: 12,
+    width: 120, borderTopWidth: 3, alignItems: 'center', gap: 4,
+  },
+  lowStockBadge: { borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, alignItems: 'center', marginBottom: 2 },
+  lowStockNum: { fontSize: 22, fontWeight: '900' },
+  lowStockUnit: { fontSize: 9, fontWeight: '600' },
+  lowStockName: { fontSize: 12, fontWeight: '700', color: colors.text, textAlign: 'center' },
+  lowStockCat: { fontSize: 10, color: colors.primary, fontWeight: '600' },
+  lowStockMin: { fontSize: 10, color: colors.textDim },
   filterRow: { flexDirection: 'row', gap: 6, marginBottom: 12 },
   filterBtn: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
   filterText: { fontSize: 12, color: colors.textDim },

@@ -1,15 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
-  Alert, KeyboardAvoidingView, Platform, Image, ActivityIndicator,
+  Alert, KeyboardAvoidingView, Platform, Image, ActivityIndicator, FlatList,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { createProduct } from '../../lib/database';
+import { createProduct, getCategories, createCategory } from '../../lib/database';
+import { Category } from '../../types';
 import { uploadProductImage } from '../../lib/storage';
 import { colors } from '../../lib/colors';
 import { formatInputNumber } from '../../lib/utils';
+import { BottomSheet } from '../../components/BottomSheet';
 
 export default function NewProductScreen() {
   const router = useRouter();
@@ -20,6 +22,14 @@ export default function NewProductScreen() {
   const [minStock, setMinStock] = useState('5');
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
+  const [showCatModal, setShowCatModal] = useState(false);
+  const [newCatName, setNewCatName] = useState('');
+  const [creatingCat, setCreatingCat] = useState(false);
+
+  useEffect(() => { getCategories().then(setCategories); }, []);
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -33,6 +43,22 @@ export default function NewProductScreen() {
       quality: 0.7,
     });
     if (!result.canceled) setImageUri(result.assets[0].uri);
+  };
+
+  const handleCreateCategory = async () => {
+    if (!newCatName.trim()) return;
+    setCreatingCat(true);
+    try {
+      const created = await createCategory(newCatName.trim());
+      setCategories(prev => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedCategory(created);
+      setNewCatName('');
+      setShowCatModal(false);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'No se pudo crear la categoría.');
+    } finally {
+      setCreatingCat(false);
+    }
   };
 
   const handleSave = async () => {
@@ -50,6 +76,7 @@ export default function NewProductScreen() {
         stock: parseInt(stock) || 0,
         min_stock: parseInt(minStock) || 5,
         image_url,
+        category_id: selectedCategory?.id ?? null,
       });
       router.back();
     } catch (e: any) {
@@ -86,6 +113,20 @@ export default function NewProductScreen() {
         <Field icon="cube" label="Nombre *" value={name} onChangeText={setName} placeholder="Ej: Enova Tab10 4G" autoCapitalize="words" />
         <Field icon="document-text" label="Descripción" value={description} onChangeText={setDescription} placeholder="Opcional" autoCapitalize="sentences" />
 
+        {/* Category selector */}
+        <View style={styles.field}>
+          <Text style={styles.fieldLabel}>Categoría</Text>
+          <TouchableOpacity style={styles.categorySelector} onPress={() => setShowCatModal(true)} activeOpacity={0.7}>
+            <Ionicons name="pricetag-outline" size={16} color={colors.textDim} style={{ marginRight: 8 }} />
+            {selectedCategory ? (
+              <Text style={[styles.input, { color: colors.text }]}>{selectedCategory.name}</Text>
+            ) : (
+              <Text style={[styles.input, { color: colors.textDim }]}>Sin categoría</Text>
+            )}
+            <Ionicons name="chevron-down" size={16} color={colors.textDim} />
+          </TouchableOpacity>
+        </View>
+
         <Text style={[styles.sectionLabel, { marginTop: 20 }]}>PRECIO Y STOCK</Text>
         <Field
           icon="cash"
@@ -114,6 +155,65 @@ export default function NewProductScreen() {
           }
         </TouchableOpacity>
       </ScrollView>
+
+      {/* Category picker */}
+      <BottomSheet visible={showCatModal} onClose={() => setShowCatModal(false)} title="Seleccionar categoría">
+        <View style={styles.sheetContent}>
+          <View style={styles.newCatRow}>
+            <TextInput
+              style={styles.newCatInput}
+              value={newCatName}
+              onChangeText={setNewCatName}
+              placeholder="Nueva categoría..."
+              placeholderTextColor={colors.textDim}
+              autoCapitalize="words"
+            />
+            <TouchableOpacity
+              style={[styles.newCatBtn, (!newCatName.trim() || creatingCat) && { opacity: 0.5 }]}
+              onPress={handleCreateCategory}
+              disabled={!newCatName.trim() || creatingCat}
+            >
+              {creatingCat
+                ? <ActivityIndicator size="small" color={colors.white} />
+                : <Ionicons name="add" size={20} color={colors.white} />
+              }
+            </TouchableOpacity>
+          </View>
+          <FlatList
+            data={categories}
+            keyExtractor={c => c.id.toString()}
+            style={{ maxHeight: 320 }}
+            keyboardShouldPersistTaps="handled"
+            ListHeaderComponent={
+              <TouchableOpacity
+                style={[styles.catOption, !selectedCategory && styles.catOptionActive]}
+                onPress={() => { setSelectedCategory(null); setShowCatModal(false); }}
+              >
+                <Ionicons name="close-circle-outline" size={16} color={!selectedCategory ? colors.primary : colors.textDim} />
+                <Text style={[styles.catOptionText, !selectedCategory && { color: colors.primary }]}>Sin categoría</Text>
+              </TouchableOpacity>
+            }
+            ListEmptyComponent={
+              <Text style={styles.noCats}>Escribí un nombre arriba para crear tu primera categoría.</Text>
+            }
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={[styles.catOption, selectedCategory?.id === item.id && styles.catOptionActive]}
+                onPress={() => { setSelectedCategory(item); setShowCatModal(false); }}
+              >
+                <Ionicons
+                  name={selectedCategory?.id === item.id ? 'checkmark-circle' : 'pricetag-outline'}
+                  size={16}
+                  color={selectedCategory?.id === item.id ? colors.primary : colors.textDim}
+                />
+                <Text style={[styles.catOptionText, selectedCategory?.id === item.id && { color: colors.primary }]}>
+                  {item.name}
+                </Text>
+              </TouchableOpacity>
+            )}
+          />
+        </View>
+      </BottomSheet>
     </KeyboardAvoidingView>
   );
 }
@@ -163,6 +263,11 @@ const styles = StyleSheet.create({
     alignItems: 'center', paddingHorizontal: 12, paddingVertical: 12,
     borderWidth: 1, borderColor: colors.border,
   },
+  categorySelector: {
+    backgroundColor: colors.surface, borderRadius: 12, flexDirection: 'row',
+    alignItems: 'center', paddingHorizontal: 12, paddingVertical: 12,
+    borderWidth: 1, borderColor: colors.border,
+  },
   prefix: { color: colors.textMuted, fontSize: 15, marginRight: 4 },
   input: { flex: 1, color: colors.text, fontSize: 15 },
   saveButton: {
@@ -170,4 +275,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 24,
   },
   saveButtonText: { color: colors.white, fontSize: 16, fontWeight: '700' },
+  sheetContent: { paddingHorizontal: 20, paddingBottom: 8 },
+  newCatRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  newCatInput: {
+    flex: 1, backgroundColor: colors.bg, borderRadius: 10, paddingHorizontal: 12,
+    paddingVertical: 10, color: colors.text, fontSize: 14,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  newCatBtn: {
+    width: 42, height: 42, borderRadius: 10, backgroundColor: colors.primary,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  noCats: { color: colors.textDim, textAlign: 'center', padding: 16, fontSize: 13 },
+  catOption: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  catOptionActive: { backgroundColor: colors.primary + '11', borderRadius: 8, paddingHorizontal: 8 },
+  catOptionText: { fontSize: 15, fontWeight: '600', color: colors.text },
 });

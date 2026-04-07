@@ -1,15 +1,27 @@
 import { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
-  Alert, KeyboardAvoidingView, Platform, Modal, FlatList,
+  Alert, KeyboardAvoidingView, Platform, FlatList,
 } from 'react-native';
 import { useRouter, useLocalSearchParams, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { createSale, createInstallments, getProducts } from '../../lib/database';
 import { Product } from '../../types';
 import { colors } from '../../lib/colors';
-import { formatCurrency, formatInputNumber, getTodayISO, generateInstallmentDates } from '../../lib/utils';
+import {
+  formatCurrency, formatInputNumber, getTodayISO,
+  generateInstallmentDates, generateWeeklyInstallmentDates, generateBiweeklyInstallmentDates,
+} from '../../lib/utils';
 import { DateInput } from '../../components/DateInput';
+import { BottomSheet } from '../../components/BottomSheet';
+
+type Frequency = 'monthly' | 'biweekly' | 'weekly';
+
+const FREQ_OPTIONS: { key: Frequency; label: string; sublabel: string }[] = [
+  { key: 'monthly', label: 'Mensual', sublabel: 'Cada mes' },
+  { key: 'biweekly', label: 'Quincenal', sublabel: 'Cada 15 días' },
+  { key: 'weekly', label: 'Semanal', sublabel: 'Cada 7 días' },
+];
 
 interface ItemForm {
   key: string;
@@ -22,6 +34,18 @@ interface ItemForm {
 let _keyCounter = 0;
 const nextKey = () => String(++_keyCounter);
 
+function getPreviewDates(frequency: Frequency, startDate: string, paymentDay: string, count: number): string[] {
+  const n = Math.min(count, 3);
+  if (n <= 0) return [];
+  if (frequency === 'weekly') return generateWeeklyInstallmentDates(startDate, n);
+  if (frequency === 'biweekly') return generateBiweeklyInstallmentDates(startDate, n);
+  const day = parseInt(paymentDay);
+  if (!day || day < 1 || day > 31) return [];
+  const isValidDate = /^\d{4}-\d{2}-\d{2}$/.test(startDate) && !isNaN(new Date(startDate).getTime());
+  if (!isValidDate) return [];
+  return generateInstallmentDates(startDate, day, n);
+}
+
 export default function NewSaleScreen() {
   const router = useRouter();
   const { clientId, clientName } = useLocalSearchParams<{ clientId: string; clientName: string }>();
@@ -31,6 +55,7 @@ export default function NewSaleScreen() {
   ]);
   const [advancePayment, setAdvancePayment] = useState('');
   const [installmentsCount, setInstallmentsCount] = useState('');
+  const [frequency, setFrequency] = useState<Frequency>('monthly');
   const [paymentDay, setPaymentDay] = useState('10');
   const [startDate, setStartDate] = useState(getTodayISO());
   const [deliveryDate, setDeliveryDate] = useState('');
@@ -64,9 +89,10 @@ export default function NewSaleScreen() {
   const count = parseInt(installmentsCount) || 0;
   const remaining = totalAmount - advance;
   const installmentAmount = count > 0 ? remaining / count : 0;
+
   const isValidStartDate = /^\d{4}-\d{2}-\d{2}$/.test(startDate) && !isNaN(new Date(startDate).getTime());
-  const previewDates = count > 0 && paymentDay && isValidStartDate
-    ? generateInstallmentDates(startDate, parseInt(paymentDay), Math.min(count, 3))
+  const previewDates = count > 0 && isValidStartDate
+    ? getPreviewDates(frequency, startDate, paymentDay, count)
     : [];
 
   const handleSave = async () => {
@@ -77,8 +103,12 @@ export default function NewSaleScreen() {
     if (advance > totalAmount) return Alert.alert('Inválido', `El anticipo (${formatCurrency(advance)}) no puede ser mayor al total (${formatCurrency(totalAmount)}).`);
     if (count <= 0) return Alert.alert('Requerido', 'Ingresá la cantidad de cuotas.');
     if (count > 360) return Alert.alert('Inválido', 'La cantidad de cuotas no puede superar 360.');
-    const day = parseInt(paymentDay);
-    if (!day || day < 1 || day > 31) return Alert.alert('Inválido', 'El día de pago debe ser entre 1 y 31.');
+
+    let payDay = 0;
+    if (frequency === 'monthly') {
+      payDay = parseInt(paymentDay);
+      if (!payDay || payDay < 1 || payDay > 31) return Alert.alert('Inválido', 'El día de pago debe ser entre 1 y 31.');
+    }
 
     for (const it of validItems) {
       const qty = parseInt(it.quantity) || 1;
@@ -115,13 +145,22 @@ export default function NewSaleScreen() {
         advance_payment: advance,
         installments_count: count,
         installment_amount: installmentAmount,
-        payment_day: day,
+        payment_day: payDay,
+        installment_frequency: frequency,
         start_date: startDate,
         delivery_date: deliveryDate,
         notes: '',
       }, saleItems);
 
-      const dates = generateInstallmentDates(startDate, day, count);
+      let dates: string[];
+      if (frequency === 'weekly') {
+        dates = generateWeeklyInstallmentDates(startDate, count);
+      } else if (frequency === 'biweekly') {
+        dates = generateBiweeklyInstallmentDates(startDate, count);
+      } else {
+        dates = generateInstallmentDates(startDate, payDay, count);
+      }
+
       await createInstallments(dates.map((date, i) => ({
         sale_id: saleId,
         installment_number: i + 1,
@@ -138,6 +177,8 @@ export default function NewSaleScreen() {
       setSaving(false);
     }
   };
+
+  const freqLabel = FREQ_OPTIONS.find(f => f.key === frequency)?.sublabel ?? '';
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -267,7 +308,6 @@ export default function NewSaleScreen() {
           const validItems = items.filter(it => it.productName.trim() && (parseFloat(it.unitPrice) || 0) > 0);
           return (
             <View style={styles.summaryBox}>
-              {/* Per-item breakdown */}
               {validItems.map((it, i) => {
                 const qty = parseInt(it.quantity) || 1;
                 const price = parseFloat(it.unitPrice) || 0;
@@ -275,12 +315,8 @@ export default function NewSaleScreen() {
                   <View key={it.key}>
                     <View style={styles.itemBreakRow}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.itemBreakName} numberOfLines={1}>
-                          {it.productName.trim()}
-                        </Text>
-                        <Text style={styles.itemBreakDetail}>
-                          {qty} {qty === 1 ? 'unidad' : 'unidades'} × {formatCurrency(price)} c/u
-                        </Text>
+                        <Text style={styles.itemBreakName} numberOfLines={1}>{it.productName.trim()}</Text>
+                        <Text style={styles.itemBreakDetail}>{qty} {qty === 1 ? 'unidad' : 'unidades'} × {formatCurrency(price)} c/u</Text>
                       </View>
                       <Text style={styles.itemBreakSubtotal}>{formatCurrency(qty * price)}</Text>
                     </View>
@@ -299,6 +335,29 @@ export default function NewSaleScreen() {
 
         {/* Installment plan */}
         <Text style={[styles.sectionLabel, { marginTop: 12 }]}>PLAN DE CUOTAS</Text>
+
+        {/* Frequency selector */}
+        <View style={styles.field}>
+          <Text style={styles.fieldLabel}>Frecuencia de pago</Text>
+          <View style={styles.freqRow}>
+            {FREQ_OPTIONS.map(opt => (
+              <TouchableOpacity
+                key={opt.key}
+                style={[styles.freqBtn, frequency === opt.key && styles.freqBtnActive]}
+                onPress={() => setFrequency(opt.key)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.freqBtnLabel, frequency === opt.key && styles.freqBtnLabelActive]}>
+                  {opt.label}
+                </Text>
+                <Text style={[styles.freqBtnSub, frequency === opt.key && styles.freqBtnSubActive]}>
+                  {opt.sublabel}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
         <View style={styles.field}>
           <Text style={styles.fieldLabel}>Cantidad de cuotas *</Text>
           <View style={styles.inputWrapper}>
@@ -313,20 +372,24 @@ export default function NewSaleScreen() {
             />
           </View>
         </View>
-        <View style={styles.field}>
-          <Text style={styles.fieldLabel}>Día de pago (1-31)</Text>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="calendar-outline" size={14} color={colors.textDim} style={{ marginRight: 6 }} />
-            <TextInput
-              style={styles.input}
-              value={paymentDay}
-              onChangeText={setPaymentDay}
-              placeholder="Ej: 10"
-              placeholderTextColor={colors.textDim}
-              keyboardType="numeric"
-            />
+
+        {/* Day of payment — only for monthly */}
+        {frequency === 'monthly' && (
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Día de pago (1-31)</Text>
+            <View style={styles.inputWrapper}>
+              <Ionicons name="calendar-outline" size={14} color={colors.textDim} style={{ marginRight: 6 }} />
+              <TextInput
+                style={styles.input}
+                value={paymentDay}
+                onChangeText={setPaymentDay}
+                placeholder="Ej: 10"
+                placeholderTextColor={colors.textDim}
+                keyboardType="numeric"
+              />
+            </View>
           </View>
-        </View>
+        )}
 
         {installmentAmount > 0 && (
           <View style={styles.installmentPreview}>
@@ -335,7 +398,8 @@ export default function NewSaleScreen() {
               <Text style={styles.previewTitle}>Resumen del plan</Text>
             </View>
             <Text style={styles.previewAmount}>
-              {count} cuotas de <Text style={{ color: colors.primary, fontWeight: '800' }}>{formatCurrency(installmentAmount)}</Text>
+              {count} cuotas {freqLabel.toLowerCase()} de{' '}
+              <Text style={{ color: colors.primary, fontWeight: '800' }}>{formatCurrency(installmentAmount)}</Text>
             </Text>
             <View style={styles.datesPreview}>
               {previewDates.map((d, i) => (
@@ -370,37 +434,30 @@ export default function NewSaleScreen() {
         </TouchableOpacity>
       </ScrollView>
 
-      {/* Product picker modal */}
-      <Modal visible={showProductModal !== null} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>Seleccionar producto</Text>
-            <FlatList
-              data={products}
-              keyExtractor={(item) => item.id.toString()}
-              style={{ maxHeight: 400 }}
-              ListEmptyComponent={<Text style={{ color: colors.textMuted, textAlign: 'center', padding: 20 }}>Sin productos en stock</Text>}
-              renderItem={({ item }) => (
-                <TouchableOpacity style={styles.productRow} onPress={() => selectProduct(showProductModal!, item)} activeOpacity={0.7}>
-                  <View style={styles.productRowInfo}>
-                    <Text style={styles.productRowName}>{item.name}</Text>
-                    <Text style={styles.productRowPrice}>{formatCurrency(item.price)}</Text>
-                  </View>
-                  <View style={[styles.stockPill, { backgroundColor: item.stock > 0 ? colors.success + '22' : colors.danger + '22' }]}>
-                    <Text style={[styles.stockPillText, { color: item.stock > 0 ? colors.success : colors.danger }]}>
-                      {item.stock} uds
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              )}
-            />
-            <TouchableOpacity style={styles.modalClose} onPress={() => setShowProductModal(null)}>
-              <Text style={styles.modalCloseText}>Cancelar</Text>
+      {/* Product picker */}
+      <BottomSheet visible={showProductModal !== null} onClose={() => setShowProductModal(null)} title="Seleccionar producto">
+        <FlatList
+          data={products}
+          keyExtractor={(item) => item.id.toString()}
+          style={{ maxHeight: 420 }}
+          contentContainerStyle={{ paddingHorizontal: 20 }}
+          keyboardShouldPersistTaps="handled"
+          ListEmptyComponent={<Text style={{ color: colors.textMuted, textAlign: 'center', padding: 20 }}>Sin productos en stock</Text>}
+          renderItem={({ item }) => (
+            <TouchableOpacity style={styles.productRow} onPress={() => selectProduct(showProductModal!, item)} activeOpacity={0.7}>
+              <View style={styles.productRowInfo}>
+                <Text style={styles.productRowName}>{item.name}</Text>
+                <Text style={styles.productRowPrice}>{formatCurrency(item.price)}</Text>
+              </View>
+              <View style={[styles.stockPill, { backgroundColor: item.stock > 0 ? colors.success + '22' : colors.danger + '22' }]}>
+                <Text style={[styles.stockPillText, { color: item.stock > 0 ? colors.success : colors.danger }]}>
+                  {item.stock} uds
+                </Text>
+              </View>
             </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+          )}
+        />
+      </BottomSheet>
     </KeyboardAvoidingView>
   );
 }
@@ -448,6 +505,17 @@ const styles = StyleSheet.create({
   summaryValue: { fontSize: 14, fontWeight: '700', color: colors.text },
   divider: { height: 1, backgroundColor: colors.border, marginVertical: 6 },
   dividerLight: { height: 1, backgroundColor: colors.border + '66', marginVertical: 2 },
+  freqRow: { flexDirection: 'row', gap: 8 },
+  freqBtn: {
+    flex: 1, backgroundColor: colors.surface, borderRadius: 12,
+    paddingVertical: 12, paddingHorizontal: 8, alignItems: 'center',
+    borderWidth: 1.5, borderColor: colors.border,
+  },
+  freqBtnActive: { borderColor: colors.primary, backgroundColor: colors.primary + '18' },
+  freqBtnLabel: { fontSize: 13, fontWeight: '700', color: colors.textMuted },
+  freqBtnLabelActive: { color: colors.primary },
+  freqBtnSub: { fontSize: 10, color: colors.textDim, marginTop: 2 },
+  freqBtnSubActive: { color: colors.primary + 'AA' },
   installmentPreview: { backgroundColor: colors.primary + '15', borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: colors.primary + '44' },
   previewHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
   previewTitle: { fontSize: 13, fontWeight: '700', color: colors.primary },
@@ -458,16 +526,10 @@ const styles = StyleSheet.create({
   moreDates: { fontSize: 12, color: colors.textDim, fontStyle: 'italic', marginTop: 2 },
   saveButton: { backgroundColor: colors.primary, borderRadius: 14, padding: 16, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 16 },
   saveButtonText: { color: colors.white, fontSize: 16, fontWeight: '700' },
-  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: '#00000066' },
-  modalSheet: { backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 36 },
-  modalHandle: { width: 36, height: 4, backgroundColor: colors.border, borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
-  modalTitle: { fontSize: 17, fontWeight: '800', color: colors.text, marginBottom: 16 },
   productRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border },
   productRowInfo: { flex: 1 },
   productRowName: { fontSize: 15, fontWeight: '600', color: colors.text },
   productRowPrice: { fontSize: 13, color: colors.primary, fontWeight: '700', marginTop: 2 },
   stockPill: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
   stockPillText: { fontSize: 12, fontWeight: '700' },
-  modalClose: { backgroundColor: colors.bg, borderRadius: 12, padding: 14, alignItems: 'center', marginTop: 12 },
-  modalCloseText: { color: colors.textMuted, fontWeight: '700' },
 });

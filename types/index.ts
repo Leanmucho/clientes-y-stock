@@ -1,3 +1,10 @@
+export interface Category {
+  id: number;
+  name: string;
+  description: string;
+  created_at: string;
+}
+
 export interface Client {
   id: number;
   name: string;
@@ -17,6 +24,8 @@ export interface Product {
   stock: number;
   min_stock: number;
   image_url: string;
+  category_id: number | null;
+  category_name?: string;
   created_at: string;
 }
 
@@ -39,6 +48,7 @@ export interface Sale {
   installments_count: number;
   installment_amount: number;
   payment_day: number;
+  installment_frequency: 'weekly' | 'biweekly' | 'monthly';
   start_date: string;
   delivery_date: string;
   notes: string;

@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { Client, Sale, SaleItem, Installment, Product, ClientPayment, Expense, Supplier, TeamMember } from '../types';
+import { Category, Client, Sale, SaleItem, Installment, Product, ClientPayment, Expense, Supplier, TeamMember } from '../types';
 import { cacheGet, cacheSet, cacheInvalidate, cacheInvalidatePrefix } from './cache';
 
 export const EXPENSE_CATEGORIES = ['Alquiler', 'Servicios', 'Stock/Compras', 'Personal', 'Transporte', 'Marketing', 'Impuestos', 'Otro'];
@@ -60,15 +60,21 @@ export async function deleteClient(id: number) {
 export async function getProducts(): Promise<Product[]> {
   const cached = cacheGet<Product[]>('products', TTL_LONG);
   if (cached) return cached;
-  const { data } = await supabase.from('products').select('*').order('name');
-  const result = (data ?? []) as Product[];
+  const { data } = await supabase.from('products').select('*, categories(name)').order('name');
+  const result = ((data ?? []) as any[]).map(p => ({
+    ...p,
+    category_name: p.categories?.name ?? null,
+    categories: undefined,
+  })) as Product[];
   cacheSet('products', result);
   return result;
 }
 
 export async function getProduct(id: number): Promise<Product | null> {
-  const { data } = await supabase.from('products').select('*').eq('id', id).single();
-  return data as Product | null;
+  const { data } = await supabase.from('products').select('*, categories(name)').eq('id', id).single();
+  if (!data) return null;
+  const row = data as any;
+  return { ...row, category_name: row.categories?.name ?? null, categories: undefined } as Product;
 }
 
 export async function createProduct(data: Omit<Product, 'id' | 'created_at'>): Promise<number> {
@@ -96,6 +102,28 @@ export async function adjustStock(productId: number, delta: number) {
   if (!Number.isInteger(productId) || productId <= 0) throw new Error('ID de producto inválido.');
   if (!Number.isFinite(delta) || Math.abs(delta) > 100_000) throw new Error('Ajuste de stock fuera de rango.');
   await supabase.rpc('adjust_stock', { product_id: productId, delta });
+}
+
+// --- CATEGORIES ---
+export async function getCategories(): Promise<Category[]> {
+  const { data } = await supabase.from('categories').select('*').order('name');
+  return (data ?? []) as Category[];
+}
+
+export async function createCategory(name: string, description = ''): Promise<Category> {
+  const user_id = await getUserId();
+  const { data, error } = await supabase
+    .from('categories')
+    .insert({ name: name.trim(), description: description.trim(), user_id })
+    .select()
+    .single();
+  if (error) throw new Error('No se pudo crear la categoría. Intentá nuevamente.');
+  return data as Category;
+}
+
+export async function deleteCategory(id: number) {
+  const { error } = await supabase.from('categories').delete().eq('id', id);
+  if (error) throw new Error('No se pudo eliminar la categoría.');
 }
 
 // --- SALES ---
@@ -367,16 +395,24 @@ export async function getDashboardStats() {
   const today = new Date().toISOString().split('T')[0];
   const thisMonth = today.substring(0, 7);
 
-  const [clientsRes, overdueRes, todayRes, collectedRes, lowStockRes] = await Promise.all([
+  const [clientsRes, overdueRes, todayRes, collectedRes, lowStockRes, monthlySalesRes, todaySalesRes] = await Promise.all([
     supabase.from('clients').select('id', { count: 'exact', head: true }),
     supabase.from('installments').select('id', { count: 'exact', head: true }).eq('status', 'overdue'),
-    supabase.from('installments').select('id', { count: 'exact', head: true }).eq('due_date', today).in('status', ['pending', 'partial', 'overdue']),
+    supabase.from('installments').select('id', { count: 'exact', head: true }).lte('due_date', today).in('status', ['pending', 'partial', 'overdue']),
     supabase.from('installments').select('paid_amount').like('paid_date', `${thisMonth}%`),
     supabase.from('products').select('id', { count: 'exact', head: true }).gt('min_stock', 0).filter('stock', 'lte', 'min_stock'),
+    supabase.from('sales').select('total_amount').like('created_at', `${thisMonth}%`),
+    supabase.from('sales').select('total_amount').like('created_at', `${today}%`),
   ]);
 
   const monthlyCollected = ((collectedRes.data ?? []) as any[]).reduce(
     (acc, r) => acc + (r.paid_amount ?? 0), 0
+  );
+  const monthlySales = ((monthlySalesRes.data ?? []) as any[]).reduce(
+    (acc, r) => acc + (r.total_amount ?? 0), 0
+  );
+  const todaySales = ((todaySalesRes.data ?? []) as any[]).reduce(
+    (acc, r) => acc + (r.total_amount ?? 0), 0
   );
 
   return {
@@ -385,7 +421,24 @@ export async function getDashboardStats() {
     todayCount: todayRes.count ?? 0,
     monthlyCollected,
     lowStockCount: lowStockRes.count ?? 0,
+    monthlySales,
+    todaySales,
   };
+}
+
+export async function getLowStockProducts(): Promise<Product[]> {
+  const { data } = await supabase
+    .from('products')
+    .select('*, categories(name)')
+    .gt('min_stock', 0)
+    .filter('stock', 'lte', 'min_stock')
+    .order('stock', { ascending: true })
+    .limit(10);
+  return ((data ?? []) as any[]).map(p => ({
+    ...p,
+    category_name: p.categories?.name ?? null,
+    categories: undefined,
+  })) as Product[];
 }
 
 export async function getOverallStats() {
@@ -648,6 +701,100 @@ export async function getBusinessAnalytics() {
       .sort(([, a], [, b]) => b - a)
       .map(([category, amount]) => ({ category, amount })),
   };
+}
+
+// --- EXPORTS ESPECÍFICOS ---
+export async function getSalesExport() {
+  const { data } = await supabase
+    .from('sales')
+    .select('*, clients(name)')
+    .order('created_at', { ascending: false });
+  return ((data ?? []) as any[]).map(s => ({
+    id: s.id,
+    fecha: s.created_at?.split('T')[0] ?? '',
+    cliente: s.clients?.name ?? '',
+    producto: s.product_name,
+    total: s.total_amount,
+    anticipo: s.advance_payment,
+    cuotas: s.installments_count,
+    valor_cuota: s.installment_amount,
+    frecuencia: s.installment_frequency ?? 'monthly',
+    inicio: s.start_date ?? '',
+    entrega: s.delivery_date ?? '',
+    notas: s.notes ?? '',
+  }));
+}
+
+export async function getDebtorsExport() {
+  const { data: clients } = await supabase.from('clients').select('id, name, phone, zone');
+  const { data: sales } = await supabase.from('sales').select('id, client_id');
+  const saleIds = (sales ?? []).map((s: any) => s.id);
+  const saleByClient: Record<number, number[]> = {};
+  for (const s of (sales ?? []) as any[]) {
+    if (!saleByClient[s.client_id]) saleByClient[s.client_id] = [];
+    saleByClient[s.client_id].push(s.id);
+  }
+  if (saleIds.length === 0) return [];
+  const { data: insts } = await supabase
+    .from('installments')
+    .select('sale_id, expected_amount, paid_amount, due_date, status')
+    .in('sale_id', saleIds)
+    .in('status', ['pending', 'partial', 'overdue']);
+  const debtByClient: Record<number, { debt: number; overdue: number }> = {};
+  for (const i of (insts ?? []) as any[]) {
+    const saleRow = (sales ?? []).find((s: any) => s.id === i.sale_id) as any;
+    if (!saleRow) continue;
+    const cid = saleRow.client_id;
+    if (!debtByClient[cid]) debtByClient[cid] = { debt: 0, overdue: 0 };
+    const owed = i.expected_amount - i.paid_amount;
+    debtByClient[cid].debt += owed;
+    if (i.status === 'overdue') debtByClient[cid].overdue += owed;
+  }
+  return ((clients ?? []) as any[])
+    .filter(c => (debtByClient[c.id]?.debt ?? 0) > 0)
+    .map(c => ({
+      cliente: c.name,
+      telefono: c.phone ?? '',
+      zona: c.zone ?? '',
+      deuda_total: debtByClient[c.id]?.debt ?? 0,
+      deuda_vencida: debtByClient[c.id]?.overdue ?? 0,
+    }))
+    .sort((a, b) => b.deuda_total - a.deuda_total);
+}
+
+export async function getInventoryExport() {
+  const { data } = await supabase
+    .from('products')
+    .select('*, categories(name)')
+    .order('name');
+  return ((data ?? []) as any[]).map(p => ({
+    nombre: p.name,
+    descripcion: p.description ?? '',
+    categoria: p.categories?.name ?? '',
+    precio: p.price,
+    stock: p.stock,
+    stock_minimo: p.min_stock,
+    estado: p.stock === 0 ? 'Sin stock' : p.stock <= p.min_stock ? 'Stock bajo' : 'OK',
+    valor_inventario: p.price * p.stock,
+  }));
+}
+
+export async function bulkUpdateStockByName(rows: { name: string; stock: number }[]): Promise<{ updated: number; notFound: string[] }> {
+  const { data: products } = await supabase.from('products').select('id, name');
+  const productMap = new Map<string, number>();
+  for (const p of (products ?? []) as any[]) {
+    productMap.set(p.name.toLowerCase().trim(), p.id);
+  }
+  let updated = 0;
+  const notFound: string[] = [];
+  for (const row of rows) {
+    const id = productMap.get(row.name.toLowerCase().trim());
+    if (!id) { notFound.push(row.name); continue; }
+    if (!Number.isFinite(row.stock) || row.stock < 0) continue;
+    const { error } = await supabase.from('products').update({ stock: row.stock }).eq('id', id);
+    if (!error) updated++;
+  }
+  return { updated, notFound };
 }
 
 // --- EXPORT ---

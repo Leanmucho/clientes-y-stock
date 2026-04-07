@@ -51,6 +51,30 @@ export function generateInstallmentDates(
   return dates;
 }
 
+export function generateWeeklyInstallmentDates(startDate: string, count: number): string[] {
+  const dates: string[] = [];
+  const start = new Date(startDate + 'T12:00:00');
+  if (isNaN(start.getTime())) return [];
+  for (let i = 1; i <= count; i++) {
+    const d = new Date(start);
+    d.setDate(d.getDate() + i * 7);
+    dates.push(d.toISOString().split('T')[0]);
+  }
+  return dates;
+}
+
+export function generateBiweeklyInstallmentDates(startDate: string, count: number): string[] {
+  const dates: string[] = [];
+  const start = new Date(startDate + 'T12:00:00');
+  if (isNaN(start.getTime())) return [];
+  for (let i = 1; i <= count; i++) {
+    const d = new Date(start);
+    d.setDate(d.getDate() + i * 14);
+    dates.push(d.toISOString().split('T')[0]);
+  }
+  return dates;
+}
+
 export function getStatusLabel(status: string): string {
   switch (status) {
     case 'paid': return 'Pagada';
