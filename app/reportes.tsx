@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   getBusinessAnalytics, getMonthlyStats, getMonthlyExpenseStats,
   getOverallStats, exportAllData, getExpenses,
+  getSalesExport, getDebtorsExport, getInventoryExport,
 } from '../lib/database';
 import { colors } from '../lib/colors';
 import { formatCurrency } from '../lib/utils';
@@ -77,6 +78,54 @@ export default function ReportesScreen() {
       const date = new Date().toISOString().split('T')[0];
       await downloadFile(toCSV(headers, rows), `gastos-${date}.csv`, 'text/csv');
       Alert.alert('Listo', 'Reporte de gastos exportado.');
+    } catch (e: any) {
+      Alert.alert('Error', e.message ?? 'No se pudo exportar.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportSales = async () => {
+    setExporting(true);
+    try {
+      const rows = await getSalesExport();
+      const headers = ['ID', 'Fecha', 'Cliente', 'Producto', 'Total', 'Pagado', 'Estado', 'Notas'];
+      const csvRows = rows.map(r => [r.id, r.fecha, r.cliente, r.producto, r.total, r.pagado, r.estado, r.notas]);
+      const date = new Date().toISOString().split('T')[0];
+      await downloadFile(toCSV(headers, csvRows), `ventas-${date}.csv`, 'text/csv');
+      Alert.alert('Listo', `${rows.length} venta(s) exportada(s).`);
+    } catch (e: any) {
+      Alert.alert('Error', e.message ?? 'No se pudo exportar.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportDebtors = async () => {
+    setExporting(true);
+    try {
+      const rows = await getDebtorsExport();
+      const headers = ['Nombre', 'Teléfono', 'Zona', 'Deuda'];
+      const csvRows = rows.map(r => [r.nombre, r.telefono, r.zona, r.deuda]);
+      const date = new Date().toISOString().split('T')[0];
+      await downloadFile(toCSV(headers, csvRows), `deudores-${date}.csv`, 'text/csv');
+      Alert.alert('Listo', `${rows.length} deudor(es) exportado(s).`);
+    } catch (e: any) {
+      Alert.alert('Error', e.message ?? 'No se pudo exportar.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportInventory = async () => {
+    setExporting(true);
+    try {
+      const rows = await getInventoryExport();
+      const headers = ['Nombre', 'Descripción', 'Precio', 'Stock', 'Stock Mínimo', 'Categoría', 'Estado'];
+      const csvRows = rows.map(r => [r.nombre, r.descripcion, r.precio, r.stock, r.stock_minimo, r.categoria, r.estado]);
+      const date = new Date().toISOString().split('T')[0];
+      await downloadFile(toCSV(headers, csvRows), `inventario-${date}.csv`, 'text/csv');
+      Alert.alert('Listo', `${rows.length} producto(s) exportado(s).`);
     } catch (e: any) {
       Alert.alert('Error', e.message ?? 'No se pudo exportar.');
     } finally {
@@ -252,31 +301,37 @@ export default function ReportesScreen() {
               <Text style={styles.exportingText}>Exportando...</Text>
             </View>
           )}
-          <TouchableOpacity style={[styles.exportBtn, exporting && { opacity: 0.5 }]} onPress={handleExportExpenses} disabled={exporting} activeOpacity={0.7}>
-            <View style={styles.exportIcon}>
-              <Ionicons name="receipt-outline" size={20} color={colors.danger} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.exportTitle}>Reporte de gastos</Text>
-              <Text style={styles.exportSubtitle}>Todos los gastos en CSV (Excel)</Text>
-            </View>
-            <Ionicons name="download-outline" size={16} color={colors.textDim} />
-          </TouchableOpacity>
+          <ExportRow icon="bar-chart-outline" color={colors.primary} title="Ventas" subtitle="Historial completo de ventas CSV" onPress={handleExportSales} disabled={exporting} />
           <View style={styles.divider} />
-          <TouchableOpacity style={[styles.exportBtn, exporting && { opacity: 0.5 }]} onPress={handleExportFull} disabled={exporting} activeOpacity={0.7}>
-            <View style={[styles.exportIcon, { backgroundColor: colors.primary + '22' }]}>
-              <Ionicons name="cloud-download-outline" size={20} color={colors.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.exportTitle}>Backup completo</Text>
-              <Text style={styles.exportSubtitle}>Todos los datos en JSON</Text>
-            </View>
-            <Ionicons name="download-outline" size={16} color={colors.textDim} />
-          </TouchableOpacity>
+          <ExportRow icon="people-outline" color={colors.warning} title="Deudores morosos" subtitle="Clientes con deuda pendiente CSV" onPress={handleExportDebtors} disabled={exporting} />
+          <View style={styles.divider} />
+          <ExportRow icon="cube-outline" color={colors.success} title="Inventario actual" subtitle="Stock y precios de productos CSV" onPress={handleExportInventory} disabled={exporting} />
+          <View style={styles.divider} />
+          <ExportRow icon="receipt-outline" color={colors.danger} title="Gastos" subtitle="Todos los gastos CSV" onPress={handleExportExpenses} disabled={exporting} />
+          <View style={styles.divider} />
+          <ExportRow icon="cloud-download-outline" color={colors.textDim} title="Backup completo" subtitle="Todos los datos en JSON" onPress={handleExportFull} disabled={exporting} />
         </View>
 
       </ScrollView>
     </>
+  );
+}
+
+function ExportRow({ icon, color, title, subtitle, onPress, disabled }: {
+  icon: string; color: string; title: string; subtitle: string;
+  onPress: () => void; disabled?: boolean;
+}) {
+  return (
+    <TouchableOpacity style={[styles.exportBtn, disabled && { opacity: 0.5 }]} onPress={onPress} disabled={disabled} activeOpacity={0.7}>
+      <View style={[styles.exportIcon, { backgroundColor: color + '22' }]}>
+        <Ionicons name={icon as any} size={20} color={color} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.exportTitle}>{title}</Text>
+        <Text style={styles.exportSubtitle}>{subtitle}</Text>
+      </View>
+      <Ionicons name="download-outline" size={16} color={colors.textDim} />
+    </TouchableOpacity>
   );
 }
 

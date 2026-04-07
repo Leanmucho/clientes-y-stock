@@ -822,3 +822,79 @@ export async function exportAllData() {
     })),
   };
 }
+
+// --- BULK STOCK IMPORT ---
+export async function bulkUpdateStockByName(
+  rows: { name: string; stock: number }[]
+): Promise<{ updated: number; notFound: string[] }> {
+  const { data: products } = await supabase.from('products').select('id, name');
+  const productMap = new Map<string, number>();
+  for (const p of (products ?? []) as { id: number; name: string }[]) {
+    productMap.set(p.name.toLowerCase().trim(), p.id);
+  }
+
+  let updated = 0;
+  const notFound: string[] = [];
+
+  for (const row of rows) {
+    const key = row.name.toLowerCase().trim();
+    const id = productMap.get(key);
+    if (!id) { notFound.push(row.name); continue; }
+    const { error } = await supabase.from('products').update({ stock: row.stock }).eq('id', id);
+    if (!error) updated++;
+  }
+
+  cacheInvalidatePrefix('products');
+  return { updated, notFound };
+}
+
+// --- EXPORT HELPERS ---
+export async function getSalesExport() {
+  const { data } = await supabase
+    .from('sales')
+    .select('id, created_at, total_amount, paid_amount, status, product_name, notes, clients(name)')
+    .order('created_at', { ascending: false });
+  return ((data ?? []) as any[]).map(s => ({
+    id: s.id,
+    fecha: s.created_at?.split('T')[0] ?? '',
+    cliente: s.clients?.name ?? '',
+    producto: s.product_name ?? '',
+    total: s.total_amount,
+    pagado: s.paid_amount,
+    estado: s.status,
+    notas: s.notes ?? '',
+  }));
+}
+
+export async function getDebtorsExport() {
+  const { data } = await supabase
+    .from('clients')
+    .select('id, name, phone, zone, sales(total_amount, paid_amount, status)')
+    .order('name');
+  return ((data ?? []) as any[])
+    .map(c => {
+      const sales = (c.sales ?? []) as any[];
+      const debt = sales
+        .filter((s: any) => s.status !== 'paid')
+        .reduce((acc: number, s: any) => acc + (s.total_amount - s.paid_amount), 0);
+      return { nombre: c.name, telefono: c.phone ?? '', zona: c.zone ?? '', deuda: debt };
+    })
+    .filter(c => c.deuda > 0)
+    .sort((a, b) => b.deuda - a.deuda);
+}
+
+export async function getInventoryExport() {
+  const { data } = await supabase
+    .from('products')
+    .select('name, description, price, stock, min_stock, categories(name)')
+    .order('name');
+  return ((data ?? []) as any[]).map(p => ({
+    nombre: p.name,
+    descripcion: p.description ?? '',
+    precio: p.price,
+    stock: p.stock,
+    stock_minimo: p.min_stock,
+    categoria: (p.categories as any)?.name ?? '',
+    estado: p.stock === 0 ? 'Sin stock' : p.stock <= p.min_stock ? 'Stock bajo' : 'OK',
+  }));
+}

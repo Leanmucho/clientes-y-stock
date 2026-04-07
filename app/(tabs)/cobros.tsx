@@ -1,16 +1,16 @@
 import { useCallback, useState } from 'react';
 import {
   View, Text, StyleSheet, SectionList, TouchableOpacity,
-  RefreshControl, TextInput,
+  RefreshControl, TextInput, Alert, ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
-import { markOverdueInstallments } from '../../lib/database';
+import { markOverdueInstallments, registerPayment } from '../../lib/database';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatDate, getStatusColor, getStatusLabel } from '../../lib/utils';
 import { Loading } from '../../components/Loading';
-import { DateInput } from '../../components/DateInput';
+import { BottomSheet } from '../../components/BottomSheet';
 
 type PendingItem = {
   id: number;
@@ -25,33 +25,27 @@ type PendingItem = {
   product_name: string;
 };
 
-type TabKey = 'hoy' | 'todos' | 'fecha';
+type TabKey = 'hoy' | 'todos';
 
 async function fetchPending(): Promise<PendingItem[]> {
-  const today = new Date().toISOString().split('T')[0];
   const { data } = await supabase
     .from('installments')
     .select('id, sale_id, installment_number, due_date, expected_amount, paid_amount, status, sales(product_name, client_id, clients(name))')
     .in('status', ['pending', 'partial', 'overdue'])
     .order('due_date', { ascending: true });
 
-  return ((data ?? []) as any[]).map((i) => {
-    // Corrección cliente-side: si el vencimiento ya pasó y el DB todavía dice 'pending', mostrar como overdue
-    const effectiveStatus =
-      i.status === 'pending' && i.due_date < today ? 'overdue' : i.status;
-    return {
-      id: i.id,
-      sale_id: i.sale_id,
-      installment_number: i.installment_number,
-      due_date: i.due_date,
-      expected_amount: i.expected_amount,
-      paid_amount: i.paid_amount,
-      status: effectiveStatus,
-      client_name: i.sales?.clients?.name ?? '',
-      client_id: i.sales?.client_id ?? 0,
-      product_name: i.sales?.product_name ?? '',
-    };
-  });
+  return ((data ?? []) as any[]).map((i) => ({
+    id: i.id,
+    sale_id: i.sale_id,
+    installment_number: i.installment_number,
+    due_date: i.due_date,
+    expected_amount: i.expected_amount,
+    paid_amount: i.paid_amount,
+    status: i.status,
+    client_name: i.sales?.clients?.name ?? '',
+    client_id: i.sales?.client_id ?? 0,
+    product_name: i.sales?.product_name ?? '',
+  }));
 }
 
 export default function CobrosScreen() {
@@ -61,7 +55,13 @@ export default function CobrosScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<TabKey>('hoy');
   const [search, setSearch] = useState('');
-  const [dateFilter, setDateFilter] = useState('');
+
+  // Quick-pay sheet state
+  const [paySheet, setPaySheet] = useState(false);
+  const [payTarget, setPayTarget] = useState<PendingItem | null>(null);
+  const [payAmount, setPayAmount] = useState('');
+  const [payNotes, setPayNotes] = useState('');
+  const [paying, setPaying] = useState(false);
 
   const load = useCallback(async () => {
     await markOverdueInstallments();
@@ -72,15 +72,11 @@ export default function CobrosScreen() {
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    setLoading(true);
-    markOverdueInstallments()
-      .then(() => fetchPending())
-      .then((data) => {
-        if (!active) return;
-        setItems(data);
-        setLoading(false);
-      })
-      .catch(() => { if (active) setLoading(false); });
+    markOverdueInstallments().then(() => fetchPending()).then((data) => {
+      if (!active) return;
+      setItems(data);
+      setLoading(false);
+    });
     return () => { active = false; };
   }, []));
 
@@ -88,23 +84,59 @@ export default function CobrosScreen() {
     setRefreshing(true); await load(); setRefreshing(false);
   }, [load]);
 
+  const openPaySheet = (item: PendingItem) => {
+    const owed = item.expected_amount - item.paid_amount;
+    setPayTarget(item);
+    setPayAmount(owed.toFixed(2));
+    setPayNotes('');
+    setPaySheet(true);
+  };
+
+  const closePaySheet = () => {
+    setPaySheet(false);
+    setPayTarget(null);
+    setPayAmount('');
+    setPayNotes('');
+  };
+
+  const handlePay = async () => {
+    if (!payTarget) return;
+    const amount = parseFloat(payAmount);
+    if (isNaN(amount) || amount <= 0) {
+      Alert.alert('Importe inválido', 'Ingresá un monto mayor a 0.');
+      return;
+    }
+    const owed = payTarget.expected_amount - payTarget.paid_amount;
+    if (amount > owed + 0.01) {
+      Alert.alert('Monto excede la deuda', `El máximo es ${formatCurrency(owed)}.`);
+      return;
+    }
+    setPaying(true);
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      await registerPayment(payTarget.id, amount, today, payNotes);
+      closePaySheet();
+      await load();
+    } catch (e: any) {
+      Alert.alert('Error', e.message ?? 'No se pudo registrar el pago.');
+    } finally {
+      setPaying(false);
+    }
+  };
+
   if (loading) return <Loading />;
 
   const today = new Date().toISOString().split('T')[0];
 
-  const isValidDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(new Date(d).getTime());
-
   const filtered = items.filter((i) => {
     const matchesTab = tab === 'hoy' ? i.due_date <= today : true;
-    const matchesDate = tab === 'fecha' && isValidDate(dateFilter) ? i.due_date === dateFilter : true;
     const q = search.toLowerCase();
     const matchesSearch = !q ||
       i.client_name.toLowerCase().includes(q) ||
       i.product_name.toLowerCase().includes(q);
-    return matchesTab && matchesDate && matchesSearch;
+    return matchesTab && matchesSearch;
   });
 
-  // Group by due_date for "todos" tab, flat for "hoy"
   type Section = { title: string; data: PendingItem[] };
   let sections: Section[] = [];
 
@@ -113,15 +145,7 @@ export default function CobrosScreen() {
     const overdueItems = filtered.filter(i => i.due_date < today);
     if (overdueItems.length > 0) sections.push({ title: `Vencidas anteriores (${overdueItems.length})`, data: overdueItems });
     if (todayItems.length > 0) sections.push({ title: `Hoy — ${formatDate(today)} (${todayItems.length})`, data: todayItems });
-  } else if (tab === 'fecha') {
-    if (isValidDate(dateFilter)) {
-      if (filtered.length > 0) {
-        const total = filtered.reduce((acc, i) => acc + (i.expected_amount - i.paid_amount), 0);
-        sections.push({ title: `${formatDate(dateFilter)} — ${formatCurrency(total)} pendiente`, data: filtered });
-      }
-    }
   } else {
-    // Group by month
     const byMonth: Record<string, PendingItem[]> = {};
     for (const i of filtered) {
       const month = i.due_date.substring(0, 7);
@@ -151,7 +175,7 @@ export default function CobrosScreen() {
         >
           <Ionicons name="today" size={15} color={tab === 'hoy' ? colors.white : colors.textDim} />
           <Text style={[styles.tabBtnText, tab === 'hoy' && styles.tabBtnTextActive]}>
-            Hoy {countToday > 0 ? `(${countToday})` : ''}
+            Cobros de hoy {countToday > 0 ? `(${countToday})` : ''}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -163,26 +187,7 @@ export default function CobrosScreen() {
             Todos ({countAll})
           </Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tabBtn, tab === 'fecha' && styles.tabBtnActive]}
-          onPress={() => setTab('fecha')}
-        >
-          <Ionicons name="calendar" size={15} color={tab === 'fecha' ? colors.white : colors.textDim} />
-          <Text style={[styles.tabBtnText, tab === 'fecha' && styles.tabBtnTextActive]}>
-            Por fecha
-          </Text>
-        </TouchableOpacity>
       </View>
-
-      {/* Date filter input */}
-      {tab === 'fecha' && (
-        <DateInput
-          value={dateFilter}
-          onChange={setDateFilter}
-          placeholder="Seleccioná una fecha"
-          style={{ marginHorizontal: 12, marginBottom: 6 }}
-        />
-      )}
 
       {/* Search */}
       <View style={styles.searchBox}>
@@ -220,22 +225,12 @@ export default function CobrosScreen() {
         stickySectionHeadersEnabled={true}
         ListEmptyComponent={
           <View style={styles.emptyCard}>
-            <Ionicons
-              name={tab === 'fecha' && !isValidDate(dateFilter) ? 'calendar-outline' : 'checkmark-circle'}
-              size={52}
-              color={tab === 'fecha' && !isValidDate(dateFilter) ? colors.textDim : colors.success}
-            />
+            <Ionicons name="checkmark-circle" size={52} color={colors.success} />
             <Text style={styles.emptyTitle}>
-              {tab === 'hoy' ? '¡Sin cobros para hoy!' :
-               tab === 'fecha' && !isValidDate(dateFilter) ? 'Ingresá una fecha' :
-               tab === 'fecha' ? 'Sin cobros ese día' :
-               'Sin cuotas pendientes'}
+              {tab === 'hoy' ? '¡Sin cobros para hoy!' : 'Sin cuotas pendientes'}
             </Text>
             <Text style={styles.emptySubtitle}>
-              {tab === 'hoy' ? 'No hay cuotas para hoy ni vencidas' :
-               tab === 'fecha' && !isValidDate(dateFilter) ? 'Escribí la fecha en formato AAAA-MM-DD para filtrar' :
-               tab === 'fecha' ? 'No hay cuotas pendientes para esa fecha' :
-               'Todos los clientes están al día'}
+              {tab === 'hoy' ? 'No hay cuotas para hoy ni vencidas' : 'Todos los clientes están al día'}
             </Text>
           </View>
         }
@@ -283,6 +278,14 @@ export default function CobrosScreen() {
                       <Text style={styles.paidAmount}>Pagó: {formatCurrency(item.paid_amount)}</Text>
                     )}
                     <Text style={styles.owedAmount}>{formatCurrency(owed)}</Text>
+                    <TouchableOpacity
+                      style={styles.payBtn}
+                      onPress={() => openPaySheet(item)}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="cash" size={13} color={colors.white} />
+                      <Text style={styles.payBtnText}>Cobrar</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
               </View>
@@ -290,6 +293,69 @@ export default function CobrosScreen() {
           );
         }}
       />
+
+      {/* Quick-pay bottom sheet */}
+      <BottomSheet
+        visible={paySheet}
+        onClose={closePaySheet}
+        title={payTarget ? `Cobrar a ${payTarget.client_name}` : 'Registrar cobro'}
+      >
+        {payTarget && (
+          <View style={styles.paySheetContent}>
+            <View style={styles.paySheetInfo}>
+              <Text style={styles.paySheetProduct} numberOfLines={1}>{payTarget.product_name}</Text>
+              <Text style={styles.paySheetMeta}>
+                Cuota {payTarget.installment_number} · Vence {formatDate(payTarget.due_date)}
+              </Text>
+              <View style={styles.paySheetOwedRow}>
+                <Text style={styles.paySheetOwedLabel}>Deuda pendiente</Text>
+                <Text style={styles.paySheetOwed}>
+                  {formatCurrency(payTarget.expected_amount - payTarget.paid_amount)}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.paySheetLabel}>Monto cobrado</Text>
+            <View style={styles.paySheetAmountRow}>
+              <Text style={styles.paySheetCurrency}>$</Text>
+              <TextInput
+                style={styles.paySheetAmountInput}
+                keyboardType="decimal-pad"
+                value={payAmount}
+                onChangeText={setPayAmount}
+                placeholder="0.00"
+                placeholderTextColor={colors.textDim}
+                selectTextOnFocus
+              />
+            </View>
+
+            <Text style={styles.paySheetLabel}>Notas (opcional)</Text>
+            <TextInput
+              style={styles.paySheetNotesInput}
+              value={payNotes}
+              onChangeText={setPayNotes}
+              placeholder="Ej: pagó en efectivo..."
+              placeholderTextColor={colors.textDim}
+              multiline
+            />
+
+            <TouchableOpacity
+              style={[styles.paySheetBtn, paying && styles.paySheetBtnDisabled]}
+              onPress={handlePay}
+              disabled={paying}
+              activeOpacity={0.8}
+            >
+              {paying
+                ? <ActivityIndicator color={colors.white} />
+                : <>
+                    <Ionicons name="checkmark-circle" size={18} color={colors.white} />
+                    <Text style={styles.paySheetBtnText}>Confirmar cobro</Text>
+                  </>
+              }
+            </TouchableOpacity>
+          </View>
+        )}
+      </BottomSheet>
     </View>
   );
 }
@@ -340,7 +406,41 @@ const styles = StyleSheet.create({
   cardBottomLeft: { gap: 2 },
   dueDate: { fontSize: 12, color: colors.textDim, fontWeight: '500' },
   installmentNum: { fontSize: 11, color: colors.textDim },
-  cardBottomRight: { alignItems: 'flex-end', gap: 1 },
+  cardBottomRight: { alignItems: 'flex-end', gap: 4 },
   paidAmount: { fontSize: 11, color: colors.success },
   owedAmount: { fontSize: 17, fontWeight: '800', color: colors.text },
+  payBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: colors.success, borderRadius: 10,
+    paddingHorizontal: 10, paddingVertical: 5, marginTop: 2,
+  },
+  payBtnText: { fontSize: 12, fontWeight: '700', color: colors.white },
+  // Pay sheet
+  paySheetContent: { paddingBottom: 16, gap: 12 },
+  paySheetInfo: {
+    backgroundColor: colors.bg, borderRadius: 12, padding: 14, gap: 4,
+  },
+  paySheetProduct: { fontSize: 15, fontWeight: '700', color: colors.text },
+  paySheetMeta: { fontSize: 12, color: colors.textDim },
+  paySheetOwedRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 },
+  paySheetOwedLabel: { fontSize: 13, color: colors.textMuted },
+  paySheetOwed: { fontSize: 20, fontWeight: '800', color: colors.warning },
+  paySheetLabel: { fontSize: 13, fontWeight: '600', color: colors.textMuted, marginBottom: -6 },
+  paySheetAmountRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: colors.bg, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 4,
+    borderWidth: 2, borderColor: colors.primary,
+  },
+  paySheetCurrency: { fontSize: 22, fontWeight: '700', color: colors.primary },
+  paySheetAmountInput: { flex: 1, fontSize: 28, fontWeight: '800', color: colors.text, paddingVertical: 8 },
+  paySheetNotesInput: {
+    backgroundColor: colors.bg, borderRadius: 12, padding: 12,
+    color: colors.text, fontSize: 14, minHeight: 60,
+  },
+  paySheetBtn: {
+    backgroundColor: colors.success, borderRadius: 14, padding: 16,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 4,
+  },
+  paySheetBtnDisabled: { opacity: 0.6 },
+  paySheetBtnText: { fontSize: 16, fontWeight: '800', color: colors.white },
 });

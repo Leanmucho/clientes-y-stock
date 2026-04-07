@@ -1,45 +1,54 @@
 import { useCallback, useState } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl,
-  TextInput, Image, ScrollView, Alert,
+  View, Text, StyleSheet, FlatList, TouchableOpacity,
+  RefreshControl, TextInput, Image, Alert, ActivityIndicator, ScrollView,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getProducts, getCategories, deleteCategory } from '../../lib/database';
-import { Product, Category } from '../../types';
+import { getProducts, bulkUpdateStockByName } from '../../lib/database';
+import { Product } from '../../types';
 import { colors } from '../../lib/colors';
 import { formatCurrency } from '../../lib/utils';
 import { Loading } from '../../components/Loading';
 import { BottomSheet } from '../../components/BottomSheet';
 
+const CSV_EXAMPLE = `Producto A,10\nProducto B,5\nProducto C,0`;
+
+function parseCSVText(text: string): { name: string; stock: number }[] {
+  return text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .map(line => {
+      const parts = line.split(',');
+      const name = parts[0]?.trim() ?? '';
+      const stock = parseInt(parts[1]?.trim() ?? '', 10);
+      return { name, stock };
+    })
+    .filter(row => row.name.length > 0 && !isNaN(row.stock) && row.stock >= 0);
+}
+
 export default function StockScreen() {
   const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
   const [search, setSearch] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [manageCats, setManageCats] = useState(false);
+
+  // Import sheet state
+  const [importSheet, setImportSheet] = useState(false);
+  const [csvText, setCsvText] = useState('');
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
-    const [prods, cats] = await Promise.all([getProducts(), getCategories()]);
-    setProducts(prods);
-    setCategories(cats);
+    const data = await getProducts();
+    setProducts(data);
     setLoading(false);
   }, []);
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    setLoading(true);
-    Promise.all([getProducts(), getCategories()])
-      .then(([prods, cats]) => {
-        if (!active) return;
-        setProducts(prods);
-        setCategories(cats);
-        setLoading(false);
-      })
-      .catch(() => { if (active) setLoading(false); });
+    getProducts().then((data) => { if (active) { setProducts(data); setLoading(false); } });
     return () => { active = false; };
   }, []));
 
@@ -49,113 +58,75 @@ export default function StockScreen() {
     setRefreshing(false);
   }, [load]);
 
+  const handleImport = async () => {
+    const rows = parseCSVText(csvText);
+    if (rows.length === 0) {
+      Alert.alert('Formato incorrecto', 'Pegá el texto en formato:\nNombre del producto,stock_nuevo\nUna línea por producto.');
+      return;
+    }
+    setImporting(true);
+    try {
+      const { updated, notFound } = await bulkUpdateStockByName(rows);
+      setImportSheet(false);
+      setCsvText('');
+      await load();
+      const msg = notFound.length > 0
+        ? `${updated} producto(s) actualizado(s).\n\nNo encontrados:\n${notFound.join(', ')}`
+        : `${updated} producto(s) actualizado(s) correctamente.`;
+      Alert.alert('Importación completada', msg);
+    } catch (e: any) {
+      Alert.alert('Error', e.message ?? 'No se pudo importar.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   if (loading) return <Loading />;
 
-  const filtered = products.filter((p) => {
-    const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase());
-    const matchesCat = selectedCategory === null || p.category_id === selectedCategory;
-    return matchesSearch && matchesCat;
-  });
+  const filtered = products.filter((p) =>
+    p.name.toLowerCase().includes(search.toLowerCase())
+  );
 
-  const lowStockCount = products.filter(p => p.stock <= p.min_stock && p.stock > 0).length;
+  const lowCount = products.filter(p => p.stock > 0 && p.stock <= p.min_stock).length;
   const emptyCount = products.filter(p => p.stock === 0).length;
-
-  const handleDeleteCategory = (cat: Category) => {
-    const hasProducts = products.some(p => p.category_id === cat.id);
-    Alert.alert(
-      'Eliminar categoría',
-      hasProducts
-        ? `"${cat.name}" tiene productos asignados. Eliminá la categoría de esos productos primero.`
-        : `¿Eliminar la categoría "${cat.name}"?`,
-      hasProducts ? [{ text: 'Entendido' }] : [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar', style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteCategory(cat.id);
-              await load();
-              if (selectedCategory === cat.id) setSelectedCategory(null);
-            } catch (e: any) {
-              Alert.alert('Error', e?.message ?? 'No se pudo eliminar.');
-            }
-          },
-        },
-      ]
-    );
-  };
 
   return (
     <View style={styles.container}>
-      {/* Search */}
-      <View style={styles.searchContainer}>
-        <Ionicons name="search" size={18} color={colors.textDim} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Buscar producto..."
-          placeholderTextColor={colors.textDim}
-          value={search}
-          onChangeText={setSearch}
-        />
-        {search.length > 0 && (
-          <TouchableOpacity onPress={() => setSearch('')}>
-            <Ionicons name="close-circle" size={18} color={colors.textDim} />
-          </TouchableOpacity>
-        )}
+      {/* Search + Import button */}
+      <View style={styles.topRow}>
+        <View style={styles.searchContainer}>
+          <Ionicons name="search" size={18} color={colors.textDim} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Buscar producto..."
+            placeholderTextColor={colors.textDim}
+            value={search}
+            onChangeText={setSearch}
+          />
+          {search.length > 0 && (
+            <TouchableOpacity onPress={() => setSearch('')}>
+              <Ionicons name="close-circle" size={18} color={colors.textDim} />
+            </TouchableOpacity>
+          )}
+        </View>
+        <TouchableOpacity style={styles.importBtn} onPress={() => setImportSheet(true)} activeOpacity={0.8}>
+          <Ionicons name="cloud-upload-outline" size={18} color={colors.primary} />
+        </TouchableOpacity>
       </View>
 
-      {/* Category chips */}
-      {categories.length > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipRow}
-        >
-          <TouchableOpacity
-            style={[styles.chip, selectedCategory === null && styles.chipActive]}
-            onPress={() => setSelectedCategory(null)}
-          >
-            <Text style={[styles.chipText, selectedCategory === null && styles.chipTextActive]}>
-              Todos ({products.length})
-            </Text>
-          </TouchableOpacity>
-          {categories.map(cat => {
-            const count = products.filter(p => p.category_id === cat.id).length;
-            const active = selectedCategory === cat.id;
-            return (
-              <TouchableOpacity
-                key={cat.id}
-                style={[styles.chip, active && styles.chipActive]}
-                onPress={() => setSelectedCategory(active ? null : cat.id)}
-              >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                  {cat.name} ({count})
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-          <TouchableOpacity
-            style={styles.chipManage}
-            onPress={() => setManageCats(true)}
-          >
-            <Ionicons name="settings-outline" size={13} color={colors.textDim} />
-          </TouchableOpacity>
-        </ScrollView>
-      )}
-
       {/* Stock alerts bar */}
-      {(lowStockCount > 0 || emptyCount > 0) && (
-        <View style={styles.alertBar}>
+      {(emptyCount > 0 || lowCount > 0) && (
+        <View style={styles.alertsRow}>
           {emptyCount > 0 && (
-            <View style={styles.alertItem}>
-              <View style={[styles.alertDot, { backgroundColor: colors.danger }]} />
-              <Text style={styles.alertText}>{emptyCount} sin stock</Text>
+            <View style={[styles.alertChip, { backgroundColor: colors.danger + '18', borderColor: colors.danger + '44' }]}>
+              <Ionicons name="alert-circle" size={13} color={colors.danger} />
+              <Text style={[styles.alertChipText, { color: colors.danger }]}>{emptyCount} sin stock</Text>
             </View>
           )}
-          {lowStockCount > 0 && (
-            <View style={styles.alertItem}>
-              <View style={[styles.alertDot, { backgroundColor: colors.warning }]} />
-              <Text style={styles.alertText}>{lowStockCount} stock bajo</Text>
+          {lowCount > 0 && (
+            <View style={[styles.alertChip, { backgroundColor: colors.warning + '18', borderColor: colors.warning + '44' }]}>
+              <Ionicons name="warning" size={13} color={colors.warning} />
+              <Text style={[styles.alertChipText, { color: colors.warning }]}>{lowCount} stock bajo</Text>
             </View>
           )}
         </View>
@@ -169,18 +140,16 @@ export default function StockScreen() {
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Ionicons name="cube-outline" size={48} color={colors.textDim} />
-            <Text style={styles.emptyTitle}>{search || selectedCategory ? 'Sin resultados' : 'Sin productos'}</Text>
-            <Text style={styles.emptySubtitle}>
-              {search || selectedCategory ? 'Probá con otros filtros' : 'Toca + para agregar tu primer producto'}
-            </Text>
+            <Text style={styles.emptyTitle}>{search ? 'Sin resultados' : 'Sin productos'}</Text>
+            <Text style={styles.emptySubtitle}>Toca + para agregar tu primer producto</Text>
           </View>
         }
         renderItem={({ item }) => {
-          const isLow = item.stock <= item.min_stock && item.stock > 0;
+          const isLow = item.stock > 0 && item.stock <= item.min_stock;
           const isEmpty = item.stock === 0;
           return (
             <TouchableOpacity
-              style={[styles.card, isEmpty && styles.cardEmpty, isLow && styles.cardLow]}
+              style={[styles.card, isEmpty && styles.cardEmpty, isLow && !isEmpty && styles.cardLow]}
               onPress={() => router.push(`/product/${item.id}`)}
               activeOpacity={0.7}
             >
@@ -203,11 +172,6 @@ export default function StockScreen() {
               )}
               <View style={styles.cardInfo}>
                 <Text style={styles.productName}>{item.name}</Text>
-                {item.category_name && (
-                  <View style={styles.catTag}>
-                    <Text style={styles.catTagText}>{item.category_name}</Text>
-                  </View>
-                )}
                 {item.description ? <Text style={styles.productDesc} numberOfLines={1}>{item.description}</Text> : null}
                 <View style={styles.cardMeta}>
                   <Text style={styles.productPrice}>{formatCurrency(item.price)}</Text>
@@ -228,28 +192,58 @@ export default function StockScreen() {
         <Ionicons name="add" size={28} color={colors.white} />
       </TouchableOpacity>
 
-      {/* Manage categories */}
-      <BottomSheet visible={manageCats} onClose={() => setManageCats(false)} title="Categorías">
-        <View style={styles.sheetContent}>
-          {categories.length === 0 ? (
-            <Text style={styles.modalEmpty}>Sin categorías. Creá una al agregar un producto.</Text>
-          ) : (
-            categories.map(cat => (
-              <View key={cat.id} style={styles.catRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.catRowName}>{cat.name}</Text>
-                  {cat.description ? <Text style={styles.catRowDesc}>{cat.description}</Text> : null}
-                </View>
-                <Text style={styles.catRowCount}>
-                  {products.filter(p => p.category_id === cat.id).length} productos
-                </Text>
-                <TouchableOpacity onPress={() => handleDeleteCategory(cat)} style={styles.catRowDelete}>
-                  <Ionicons name="trash-outline" size={16} color={colors.danger} />
-                </TouchableOpacity>
-              </View>
-            ))
-          )}
-        </View>
+      {/* Import stock sheet */}
+      <BottomSheet visible={importSheet} onClose={() => { setImportSheet(false); setCsvText(''); }} title="Importar stock">
+        <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+          <View style={styles.importContent}>
+            <View style={styles.importInfo}>
+              <Ionicons name="information-circle" size={16} color={colors.primary} />
+              <Text style={styles.importInfoText}>
+                Pegá el contenido de tu planilla en formato CSV:{'\n'}
+                <Text style={styles.importCode}>Nombre del producto,stock_nuevo</Text>
+              </Text>
+            </View>
+
+            <View style={styles.importExampleBox}>
+              <Text style={styles.importExampleLabel}>Ejemplo:</Text>
+              <Text style={styles.importExampleText}>{CSV_EXAMPLE}</Text>
+            </View>
+
+            <Text style={styles.importLabel}>Pegá aquí tu CSV:</Text>
+            <TextInput
+              style={styles.importTextArea}
+              value={csvText}
+              onChangeText={setCsvText}
+              placeholder={'Producto A,10\nProducto B,5\n...'}
+              placeholderTextColor={colors.textDim}
+              multiline
+              textAlignVertical="top"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            {csvText.length > 0 && (
+              <Text style={styles.importPreviewCount}>
+                {parseCSVText(csvText).length} línea(s) válida(s) detectadas
+              </Text>
+            )}
+
+            <TouchableOpacity
+              style={[styles.importApplyBtn, (importing || csvText.trim().length === 0) && styles.importApplyBtnDisabled]}
+              onPress={handleImport}
+              disabled={importing || csvText.trim().length === 0}
+              activeOpacity={0.8}
+            >
+              {importing
+                ? <ActivityIndicator color={colors.white} />
+                : <>
+                    <Ionicons name="checkmark-circle" size={18} color={colors.white} />
+                    <Text style={styles.importApplyBtnText}>Aplicar cambios</Text>
+                  </>
+              }
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
       </BottomSheet>
     </View>
   );
@@ -257,32 +251,24 @@ export default function StockScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
+  topRow: { flexDirection: 'row', alignItems: 'center', gap: 8, margin: 12, marginBottom: 6 },
   searchContainer: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: colors.surface, margin: 12, marginBottom: 6, borderRadius: 12,
+    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: colors.surface, borderRadius: 12,
     paddingHorizontal: 12, paddingVertical: 8,
   },
   searchInput: { flex: 1, color: colors.text, fontSize: 14 },
-  chipRow: { paddingHorizontal: 12, paddingVertical: 6, gap: 6, alignItems: 'center' },
-  chip: {
-    backgroundColor: colors.surface, borderRadius: 20,
-    paddingHorizontal: 14, paddingVertical: 6,
-    borderWidth: 1, borderColor: colors.border,
+  importBtn: {
+    backgroundColor: colors.surface, borderRadius: 12,
+    width: 44, height: 44, justifyContent: 'center', alignItems: 'center',
   },
-  chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  chipText: { fontSize: 12, fontWeight: '600', color: colors.textMuted },
-  chipTextActive: { color: colors.white },
-  chipManage: {
-    width: 30, height: 30, borderRadius: 15,
-    backgroundColor: colors.surface, justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1, borderColor: colors.border,
+  alertsRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 12, marginBottom: 6 },
+  alertChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5,
+    borderWidth: 1,
   },
-  alertBar: {
-    flexDirection: 'row', gap: 12, paddingHorizontal: 14, paddingBottom: 6,
-  },
-  alertItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  alertDot: { width: 7, height: 7, borderRadius: 4 },
-  alertText: { fontSize: 11, color: colors.textDim },
+  alertChipText: { fontSize: 12, fontWeight: '700' },
   list: { paddingHorizontal: 12, paddingBottom: 90 },
   emptyContainer: { alignItems: 'center', paddingTop: 60, gap: 8 },
   emptyTitle: { fontSize: 17, fontWeight: '700', color: colors.textMuted },
@@ -310,11 +296,6 @@ const styles = StyleSheet.create({
   thumbBadgeText: { fontSize: 10, fontWeight: '800', color: colors.white },
   cardInfo: { flex: 1 },
   productName: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 2 },
-  catTag: {
-    alignSelf: 'flex-start', backgroundColor: colors.primary + '22',
-    borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2, marginBottom: 3,
-  },
-  catTagText: { fontSize: 10, fontWeight: '700', color: colors.primary },
   productDesc: { fontSize: 12, color: colors.textMuted, marginBottom: 4 },
   cardMeta: { flexDirection: 'row', justifyContent: 'space-between' },
   productPrice: { fontSize: 14, fontWeight: '700', color: colors.primary },
@@ -326,14 +307,31 @@ const styles = StyleSheet.create({
     shadowColor: colors.primary, shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.5, shadowRadius: 8, elevation: 8,
   },
-  sheetContent: { paddingHorizontal: 20, paddingBottom: 8 },
-  modalEmpty: { color: colors.textMuted, textAlign: 'center', paddingVertical: 20 },
-  catRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
+  // Import sheet
+  importContent: { gap: 12, paddingBottom: 24 },
+  importInfo: {
+    flexDirection: 'row', gap: 8, alignItems: 'flex-start',
+    backgroundColor: colors.primary + '12', borderRadius: 12, padding: 12,
   },
-  catRowName: { fontSize: 14, fontWeight: '700', color: colors.text },
-  catRowDesc: { fontSize: 12, color: colors.textDim, marginTop: 1 },
-  catRowCount: { fontSize: 11, color: colors.textDim },
-  catRowDelete: { padding: 4 },
+  importInfoText: { flex: 1, fontSize: 13, color: colors.textMuted, lineHeight: 20 },
+  importCode: { fontFamily: 'monospace', color: colors.primary, fontWeight: '600' },
+  importExampleBox: {
+    backgroundColor: colors.bg, borderRadius: 10, padding: 12,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  importExampleLabel: { fontSize: 11, fontWeight: '700', color: colors.textDim, marginBottom: 4 },
+  importExampleText: { fontFamily: 'monospace', fontSize: 12, color: colors.textMuted, lineHeight: 20 },
+  importLabel: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
+  importTextArea: {
+    backgroundColor: colors.bg, borderRadius: 12, padding: 12,
+    color: colors.text, fontSize: 13, minHeight: 120,
+    borderWidth: 1, borderColor: colors.border, fontFamily: 'monospace',
+  },
+  importPreviewCount: { fontSize: 12, color: colors.primary, fontWeight: '600', textAlign: 'center' },
+  importApplyBtn: {
+    backgroundColor: colors.primary, borderRadius: 14, padding: 16,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
+  importApplyBtnDisabled: { opacity: 0.5 },
+  importApplyBtnText: { fontSize: 16, fontWeight: '800', color: colors.white },
 });

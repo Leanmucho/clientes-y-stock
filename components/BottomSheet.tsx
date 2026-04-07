@@ -1,44 +1,43 @@
 import { useEffect, useRef } from 'react';
 import {
-  Modal, View, Animated, PanResponder, StyleSheet,
-  TouchableOpacity, Dimensions, Text,
+  Modal, View, Text, StyleSheet, Animated, PanResponder,
+  TouchableWithoutFeedback, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { colors } from '../lib/colors';
 
-const SCREEN_HEIGHT = Dimensions.get('window').height;
-const DISMISS_THRESHOLD = 80; // px hacia abajo para cerrar
-
-interface Props {
+interface BottomSheetProps {
   visible: boolean;
   onClose: () => void;
   title?: string;
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }
 
-export function BottomSheet({ visible, onClose, title, children }: Props) {
-  const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
+const DISMISS_THRESHOLD = 80;
+
+export function BottomSheet({ visible, onClose, title, children }: BottomSheetProps) {
+  const translateY = useRef(new Animated.Value(600)).current;
 
   useEffect(() => {
     if (visible) {
-      translateY.setValue(SCREEN_HEIGHT);
       Animated.spring(translateY, {
         toValue: 0,
         useNativeDriver: true,
-        tension: 70,
-        friction: 12,
+        damping: 20,
+        stiffness: 200,
       }).start();
+    } else {
+      translateY.setValue(600);
     }
   }, [visible]);
 
   const dismiss = () => {
     Animated.timing(translateY, {
-      toValue: SCREEN_HEIGHT,
+      toValue: 600,
       duration: 220,
       useNativeDriver: true,
-    }).start(onClose);
+    }).start(() => onClose());
   };
 
-  // PanResponder solo en el handle — no interfiere con listas scrolleables
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -53,16 +52,9 @@ export function BottomSheet({ visible, onClose, title, children }: Props) {
           Animated.spring(translateY, {
             toValue: 0,
             useNativeDriver: true,
-            tension: 70,
-            friction: 12,
+            damping: 20,
+            stiffness: 250,
           }).start();
-        }
-      },
-      onPanResponderTerminate: (_, g) => {
-        if (g.dy > DISMISS_THRESHOLD) {
-          dismiss();
-        } else {
-          Animated.spring(translateY, { toValue: 0, useNativeDriver: true, tension: 70, friction: 12 }).start();
         }
       },
     })
@@ -71,58 +63,61 @@ export function BottomSheet({ visible, onClose, title, children }: Props) {
   return (
     <Modal
       visible={visible}
-      animationType="none"
       transparent
+      animationType="none"
       onRequestClose={dismiss}
       statusBarTranslucent
     >
-      <View style={styles.container}>
-        {/* Backdrop: tap para cerrar */}
-        <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={dismiss} />
-
+      <KeyboardAvoidingView
+        style={styles.overlay}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <TouchableWithoutFeedback onPress={dismiss}>
+          <View style={styles.backdrop} />
+        </TouchableWithoutFeedback>
         <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
-          {/* Handle draggable */}
+          {/* Draggable handle */}
           <View style={styles.handleArea} {...panResponder.panHandlers}>
             <View style={styles.handle} />
             {title && <Text style={styles.title}>{title}</Text>}
           </View>
-
-          {children}
+          <View style={styles.content}>
+            {children}
+          </View>
         </Animated.View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'flex-end' },
+  overlay: { flex: 1, justifyContent: 'flex-end' },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#00000077',
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   sheet: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    paddingBottom: 36,
-    maxHeight: SCREEN_HEIGHT * 0.9,
+    maxHeight: '90%',
   },
   handleArea: {
+    alignItems: 'center',
     paddingTop: 12,
     paddingBottom: 8,
     paddingHorizontal: 20,
-    alignItems: 'center',
   },
   handle: {
-    width: 36, height: 4,
-    backgroundColor: colors.border,
-    borderRadius: 2,
-    marginBottom: 4,
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: colors.border, marginBottom: 10,
   },
   title: {
-    fontSize: 17, fontWeight: '800',
-    color: colors.text,
-    alignSelf: 'flex-start',
-    marginTop: 8, marginBottom: 4,
+    fontSize: 17, fontWeight: '800', color: colors.text, marginBottom: 4,
+  },
+  content: {
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    flexShrink: 1,
   },
 });
