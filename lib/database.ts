@@ -254,9 +254,13 @@ export async function registerPayment(
   else if (paidAmount >= (inst as any).expected_amount) status = 'paid';
   else status = 'partial';
 
+  // Always set paid_date when payment is recorded; fall back to today if not provided
+  const today = new Date().toISOString().split('T')[0];
+  const resolvedPaidDate = paidAmount > 0 ? (paidDate || today) : null;
+
   const { error } = await supabase
     .from('installments')
-    .update({ paid_amount: paidAmount, paid_date: paidDate || null, status, notes })
+    .update({ paid_amount: paidAmount, paid_date: resolvedPaidDate, status, notes })
     .eq('id', installmentId);
   if (error) throw new Error(`Error al registrar pago: ${error.message}`);
 }
@@ -321,13 +325,15 @@ export async function getTodayInstallments(): Promise<
 
 export async function getDashboardStats() {
   const today = new Date().toISOString().split('T')[0];
-  const thisMonth = today.substring(0, 7);
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+  const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString().split('T')[0];
 
   const [clientsRes, overdueRes, todayRes, collectedRes, lowStockRes] = await Promise.all([
     supabase.from('clients').select('id', { count: 'exact', head: true }),
     supabase.from('installments').select('id', { count: 'exact', head: true }).eq('status', 'overdue'),
     supabase.from('installments').select('id', { count: 'exact', head: true }).eq('due_date', today).in('status', ['pending', 'partial', 'overdue']),
-    supabase.from('installments').select('paid_amount').like('paid_date', `${thisMonth}%`),
+    supabase.from('installments').select('paid_amount').gte('paid_date', monthStart).lt('paid_date', nextMonthStart),
     supabase.from('products').select('id', { count: 'exact', head: true }).gt('min_stock', 0).filter('stock', 'lte', 'min_stock'),
   ]);
 
@@ -363,17 +369,35 @@ export async function getMonthlyStats(): Promise<{ month: string; collected: num
   const now = new Date();
   const fromDate = new Date(now.getFullYear(), now.getMonth() - 11, 1).toISOString().split('T')[0];
 
-  const { data } = await supabase
-    .from('installments')
-    .select('paid_date, paid_amount')
-    .gte('paid_date', fromDate)
-    .not('paid_date', 'is', null);
+  // Fetch paid installments: those with paid_date in range, plus those with null paid_date
+  // (historical data may lack paid_date — use due_date as fallback)
+  const [withDate, withoutDate] = await Promise.all([
+    supabase
+      .from('installments')
+      .select('paid_date, due_date, paid_amount')
+      .gte('paid_date', fromDate)
+      .not('paid_date', 'is', null),
+    supabase
+      .from('installments')
+      .select('paid_date, due_date, paid_amount')
+      .eq('status', 'paid')
+      .is('paid_date', null)
+      .gte('due_date', fromDate),
+  ]);
 
   const byMonth: Record<string, number> = {};
-  for (const row of (data ?? []) as any[]) {
-    if (!row.paid_date) continue;
-    const month = row.paid_date.substring(0, 7);
+  const addRow = (row: { paid_date: string | null; due_date: string | null; paid_amount: number | null }) => {
+    const dateKey = row.paid_date ?? row.due_date;
+    if (!dateKey) return;
+    const month = dateKey.substring(0, 7);
     byMonth[month] = (byMonth[month] ?? 0) + (row.paid_amount ?? 0);
+  };
+
+  for (const row of (withDate.data ?? []) as { paid_date: string | null; due_date: string | null; paid_amount: number | null }[]) {
+    addRow(row);
+  }
+  for (const row of (withoutDate.data ?? []) as { paid_date: string | null; due_date: string | null; paid_amount: number | null }[]) {
+    addRow(row);
   }
 
   const results: { month: string; collected: number }[] = [];
@@ -557,30 +581,62 @@ export async function deleteTeamMember(id: number) {
 // --- BUSINESS ANALYTICS ---
 export async function getBusinessAnalytics() {
   const now = new Date();
-  const thisMonth = now.toISOString().substring(0, 7);
-  const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().substring(0, 7);
 
-  const [colThis, colLast, expThis, expLast, expByCat, salesCount, clientsCount] = await Promise.all([
-    supabase.from('installments').select('paid_amount').like('paid_date', `${thisMonth}%`),
-    supabase.from('installments').select('paid_amount').like('paid_date', `${lastMonth}%`),
-    supabase.from('expenses').select('amount').like('date', `${thisMonth}%`),
-    supabase.from('expenses').select('amount').like('date', `${lastMonth}%`),
-    supabase.from('expenses').select('category, amount').like('date', `${thisMonth}%`),
-    supabase.from('sales').select('id', { count: 'exact', head: true }).like('created_at', `${thisMonth}%`),
-    supabase.from('clients').select('id', { count: 'exact', head: true }).like('created_at', `${thisMonth}%`),
+  // DATE range for current month (paid_date / expense date columns — DATE type)
+  const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+  const thisMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString().split('T')[0];
+  const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
+  const lastMonthEnd = thisMonthStart;
+
+  // TIMESTAMPTZ range for created_at columns (sales, clients)
+  const thisMonthStartTs = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const thisMonthEndTs = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
+
+  const [
+    colThis, colThisNullDate,
+    colLast, colLastNullDate,
+    expThis, expLast, expByCat,
+    salesCount, clientsCount,
+  ] = await Promise.all([
+    // Installments with explicit paid_date in this/last month
+    supabase.from('installments').select('paid_amount')
+      .gte('paid_date', thisMonthStart).lt('paid_date', thisMonthEnd),
+    // Installments with null paid_date (historical) — use due_date as fallback for this month
+    supabase.from('installments').select('paid_amount')
+      .eq('status', 'paid').is('paid_date', null)
+      .gte('due_date', thisMonthStart).lt('due_date', thisMonthEnd),
+    supabase.from('installments').select('paid_amount')
+      .gte('paid_date', lastMonthStart).lt('paid_date', lastMonthEnd),
+    supabase.from('installments').select('paid_amount')
+      .eq('status', 'paid').is('paid_date', null)
+      .gte('due_date', lastMonthStart).lt('due_date', lastMonthEnd),
+    supabase.from('expenses').select('amount')
+      .gte('date', thisMonthStart).lt('date', thisMonthEnd),
+    supabase.from('expenses').select('amount')
+      .gte('date', lastMonthStart).lt('date', lastMonthEnd),
+    supabase.from('expenses').select('category, amount')
+      .gte('date', thisMonthStart).lt('date', thisMonthEnd),
+    supabase.from('sales').select('id', { count: 'exact', head: true })
+      .gte('created_at', thisMonthStartTs).lt('created_at', thisMonthEndTs),
+    supabase.from('clients').select('id', { count: 'exact', head: true })
+      .gte('created_at', thisMonthStartTs).lt('created_at', thisMonthEndTs),
   ]);
 
-  function sum(data: any[] | null, key: string) {
-    return ((data ?? []) as any[]).reduce((acc, r) => acc + (r[key] ?? 0), 0);
+  function sum(data: { [key: string]: number }[] | null, key: string): number {
+    return (data ?? []).reduce((acc, r) => acc + (r[key] ?? 0), 0);
   }
 
-  const thisCollected = sum(colThis.data, 'paid_amount');
-  const lastCollected = sum(colLast.data, 'paid_amount');
-  const thisExpenses = sum(expThis.data, 'amount');
-  const lastExpenses = sum(expLast.data, 'amount');
+  const thisCollected =
+    sum(colThis.data as { paid_amount: number }[] | null, 'paid_amount') +
+    sum(colThisNullDate.data as { paid_amount: number }[] | null, 'paid_amount');
+  const lastCollected =
+    sum(colLast.data as { paid_amount: number }[] | null, 'paid_amount') +
+    sum(colLastNullDate.data as { paid_amount: number }[] | null, 'paid_amount');
+  const thisExpenses = sum(expThis.data as { amount: number }[] | null, 'amount');
+  const lastExpenses = sum(expLast.data as { amount: number }[] | null, 'amount');
 
   const byCategory: Record<string, number> = {};
-  for (const e of (expByCat.data ?? []) as any[]) {
+  for (const e of (expByCat.data ?? []) as { category: string; amount: number }[]) {
     byCategory[e.category] = (byCategory[e.category] ?? 0) + e.amount;
   }
 
