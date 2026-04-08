@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
   Alert, KeyboardAvoidingView, Platform, Modal, FlatList,
@@ -6,7 +6,7 @@ import {
 import { useRouter, useLocalSearchParams, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { createSale, createInstallments, getProducts } from '../../lib/database';
-import { Product } from '../../types';
+import { Product, InstallmentFrequency } from '../../types';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatInputNumber, getTodayISO, generateInstallmentDates } from '../../lib/utils';
 
@@ -16,6 +16,30 @@ interface ValidationError {
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+const FREQUENCIES: { value: InstallmentFrequency; label: string; days: number | null }[] = [
+  { value: 'monthly', label: 'Mensual', days: null },
+  { value: 'biweekly', label: 'Quincenal', days: 14 },
+  { value: 'weekly', label: 'Semanal', days: 7 },
+];
+
+function buildInstallmentDates(
+  startDate: string,
+  paymentDay: number,
+  count: number,
+  frequency: InstallmentFrequency,
+): string[] {
+  if (frequency === 'monthly') {
+    return generateInstallmentDates(startDate, paymentDay, count);
+  }
+  const step = frequency === 'weekly' ? 7 : 14;
+  const base = new Date(startDate + 'T12:00:00');
+  return Array.from({ length: count }, (_, i) => {
+    const d = new Date(base);
+    d.setDate(d.getDate() + step * (i + 1));
+    return d.toISOString().split('T')[0];
+  });
+}
 
 interface ItemForm {
   key: string;
@@ -40,6 +64,7 @@ export default function NewSaleScreen() {
   const [paymentDay, setPaymentDay] = useState('10');
   const [startDate, setStartDate] = useState(getTodayISO());
   const [deliveryDate, setDeliveryDate] = useState('');
+  const [frequency, setFrequency] = useState<InstallmentFrequency>('monthly');
   const [saving, setSaving] = useState(false);
   const [touched, setTouched] = useState(false);
 
@@ -64,16 +89,39 @@ export default function NewSaleScreen() {
     setShowProductModal(null);
   };
 
-  const totalAmount = items.reduce((acc, it) => {
-    return acc + (parseInt(it.quantity) || 1) * (parseFloat(it.unitPrice) || 0);
-  }, 0);
-  const advance = parseFloat(advancePayment) || 0;
-  const count = parseInt(installmentsCount) || 0;
-  const remaining = totalAmount - advance;
-  const installmentAmount = count > 0 ? remaining / count : 0;
-  const previewDates = count > 0 && paymentDay
-    ? generateInstallmentDates(startDate, parseInt(paymentDay), Math.min(count, 3))
-    : [];
+  const { totalAmount, advance, count, remaining, installmentAmount, previewDates } = useMemo(() => {
+    const totalAmount = items.reduce(
+      (acc, it) => acc + (parseInt(it.quantity) || 1) * (parseFloat(it.unitPrice) || 0),
+      0,
+    );
+    const advance = parseFloat(advancePayment) || 0;
+    const count = parseInt(installmentsCount) || 0;
+    const remaining = totalAmount - advance;
+    const installmentAmount = count > 0 ? remaining / count : 0;
+
+    const previewCount = Math.min(count, 3);
+    const day = parseInt(paymentDay) || 10;
+    let previewDates: string[] = [];
+    if (count > 0 && startDate) {
+      if (frequency === 'monthly') {
+        previewDates = generateInstallmentDates(startDate, day, previewCount);
+      } else {
+        const intervalDays: Record<Exclude<InstallmentFrequency, 'monthly'>, number> = {
+          weekly: 7,
+          biweekly: 14,
+        };
+        const step = intervalDays[frequency];
+        const base = new Date(startDate + 'T12:00:00');
+        previewDates = Array.from({ length: previewCount }, (_, i) => {
+          const d = new Date(base);
+          d.setDate(d.getDate() + step * (i + 1));
+          return d.toISOString().split('T')[0];
+        });
+      }
+    }
+
+    return { totalAmount, advance, count, remaining, installmentAmount, previewDates };
+  }, [items, advancePayment, installmentsCount, paymentDay, startDate, frequency]);
 
   const validationErrors: ValidationError[] = (() => {
     const errors: ValidationError[] = [];
@@ -150,13 +198,14 @@ export default function NewSaleScreen() {
         advance_payment: advance,
         installments_count: count,
         installment_amount: installmentAmount,
+        installment_frequency: frequency,
         payment_day: day,
         start_date: startDate,
         delivery_date: deliveryDate,
         notes: '',
       }, saleItems);
 
-      const dates = generateInstallmentDates(startDate, day, count);
+      const dates = buildInstallmentDates(startDate, day, count, frequency);
       await createInstallments(dates.map((date, i) => ({
         sale_id: saleId,
         installment_number: i + 1,
@@ -334,6 +383,25 @@ export default function NewSaleScreen() {
 
         {/* Installment plan */}
         <Text style={[styles.sectionLabel, { marginTop: 12 }]}>PLAN DE CUOTAS</Text>
+
+        <View style={styles.field}>
+          <Text style={styles.fieldLabel}>Frecuencia de pago</Text>
+          <View style={styles.freqRow}>
+            {FREQUENCIES.map((f) => (
+              <TouchableOpacity
+                key={f.value}
+                style={[styles.freqBtn, frequency === f.value && styles.freqBtnActive]}
+                onPress={() => setFrequency(f.value)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.freqText, frequency === f.value && styles.freqTextActive]}>
+                  {f.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
         <View style={styles.field}>
           <Text style={styles.fieldLabel}>Cantidad de cuotas *</Text>
           <View style={[
@@ -625,4 +693,12 @@ const styles = StyleSheet.create({
   stockPillText: { fontSize: 12, fontWeight: '700' },
   modalClose: { backgroundColor: colors.bg, borderRadius: 12, padding: 14, alignItems: 'center', marginTop: 12 },
   modalCloseText: { color: colors.textMuted, fontWeight: '700' },
+  freqRow: { flexDirection: 'row', gap: 8 },
+  freqBtn: {
+    flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center',
+    backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border,
+  },
+  freqBtnActive: { backgroundColor: colors.primary + '18', borderColor: colors.primary },
+  freqText: { fontSize: 13, fontWeight: '600', color: colors.textDim },
+  freqTextActive: { color: colors.primary, fontWeight: '700' },
 });
