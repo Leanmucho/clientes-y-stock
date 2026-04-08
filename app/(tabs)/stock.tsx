@@ -5,8 +5,8 @@ import {
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getProducts, bulkUpdateStockByName } from '../../lib/database';
-import { Product } from '../../types';
+import { getProducts, getCategories, bulkUpdateStockByName } from '../../lib/database';
+import { Product, Category } from '../../types';
 import { colors } from '../../lib/colors';
 import { formatCurrency } from '../../lib/utils';
 import { Loading } from '../../components/Loading';
@@ -31,6 +31,8 @@ function parseCSVText(text: string): { name: string; stock: number }[] {
 export default function StockScreen() {
   const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -41,14 +43,17 @@ export default function StockScreen() {
   const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
-    const data = await getProducts();
+    const [data, cats] = await Promise.all([getProducts(), getCategories()]);
     setProducts(data);
+    setCategories(cats);
     setLoading(false);
   }, []);
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    getProducts().then((data) => { if (active) { setProducts(data); setLoading(false); } });
+    Promise.all([getProducts(), getCategories()]).then(([data, cats]) => {
+      if (active) { setProducts(data); setCategories(cats); setLoading(false); }
+    });
     return () => { active = false; };
   }, []));
 
@@ -83,9 +88,11 @@ export default function StockScreen() {
 
   if (loading) return <Loading />;
 
-  const filtered = products.filter((p) =>
-    p.name.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = products.filter((p) => {
+    const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase());
+    const matchesCategory = selectedCategory === null || p.category_id === selectedCategory;
+    return matchesSearch && matchesCategory;
+  });
 
   const lowCount = products.filter(p => p.stock > 0 && p.stock <= p.min_stock).length;
   const emptyCount = products.filter(p => p.stock === 0).length;
@@ -113,6 +120,37 @@ export default function StockScreen() {
           <Ionicons name="cloud-upload-outline" size={18} color={colors.primary} />
         </TouchableOpacity>
       </View>
+
+      {/* Category filter chips */}
+      {categories.length > 0 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.catRow}
+        >
+          <TouchableOpacity
+            style={[styles.catChip, selectedCategory === null && styles.catChipActive]}
+            onPress={() => setSelectedCategory(null)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.catChipText, selectedCategory === null && styles.catChipTextActive]}>
+              Todos
+            </Text>
+          </TouchableOpacity>
+          {categories.map(cat => (
+            <TouchableOpacity
+              key={cat.id}
+              style={[styles.catChip, selectedCategory === cat.id && styles.catChipActive]}
+              onPress={() => setSelectedCategory(prev => prev === cat.id ? null : cat.id)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.catChipText, selectedCategory === cat.id && styles.catChipTextActive]}>
+                {cat.name}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
 
       {/* Stock alerts bar */}
       {(emptyCount > 0 || lowCount > 0) && (
@@ -334,4 +372,12 @@ const styles = StyleSheet.create({
   },
   importApplyBtnDisabled: { opacity: 0.5 },
   importApplyBtnText: { fontSize: 16, fontWeight: '800', color: colors.white },
+  catRow: { paddingHorizontal: 12, paddingVertical: 6, gap: 8, flexDirection: 'row', alignItems: 'center' },
+  catChip: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
+  },
+  catChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  catChipText: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
+  catChipTextActive: { color: colors.white },
 });
