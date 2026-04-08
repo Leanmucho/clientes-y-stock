@@ -23,6 +23,22 @@ const FREQUENCIES: { value: InstallmentFrequency; label: string; days: number | 
   { value: 'weekly', label: 'Semanal', days: 7 },
 ];
 
+// How many installments of each frequency fit in 1 month (approx)
+const FREQ_PER_MONTH: Record<InstallmentFrequency, number> = {
+  monthly: 1,
+  biweekly: 2,
+  weekly: 4,
+};
+
+function durationLabel(count: number, frequency: InstallmentFrequency): string {
+  const months = Math.round(count / FREQ_PER_MONTH[frequency]);
+  if (months === 0) return '';
+  if (months === 1) return '1 mes';
+  if (months < 12) return `${months} meses`;
+  const years = Math.round((months / 12) * 10) / 10;
+  return `${years} ${years === 1 ? 'año' : 'años'}`;
+}
+
 function buildInstallmentDates(
   startDate: string,
   paymentDay: number,
@@ -87,6 +103,20 @@ export default function NewSaleScreen() {
   const selectProduct = (itemKey: string, p: Product) => {
     updateItem(itemKey, { product: p, productName: p.name, unitPrice: p.price > 0 ? p.price.toString() : '' });
     setShowProductModal(null);
+  };
+
+  // When frequency changes, scale the installment count to keep the same total duration.
+  // E.g. 12 monthly → biweekly: 12 × (2/1) = 24 biweekly installments (still 12 months)
+  const handleFrequencyChange = (newFreq: InstallmentFrequency) => {
+    const currentCount = parseInt(installmentsCount) || 0;
+    if (currentCount > 0 && newFreq !== frequency) {
+      const oldPerMonth = FREQ_PER_MONTH[frequency];
+      const newPerMonth = FREQ_PER_MONTH[newFreq];
+      const months = Math.round(currentCount / oldPerMonth);
+      const newCount = Math.max(1, months * newPerMonth);
+      setInstallmentsCount(String(newCount));
+    }
+    setFrequency(newFreq);
   };
 
   const { totalAmount, advance, count, remaining, installmentAmount, previewDates } = useMemo(() => {
@@ -391,7 +421,7 @@ export default function NewSaleScreen() {
               <TouchableOpacity
                 key={f.value}
                 style={[styles.freqBtn, frequency === f.value && styles.freqBtnActive]}
-                onPress={() => setFrequency(f.value)}
+                onPress={() => handleFrequencyChange(f.value)}
                 activeOpacity={0.8}
               >
                 <Text style={[styles.freqText, frequency === f.value && styles.freqTextActive]}>
@@ -454,8 +484,17 @@ export default function NewSaleScreen() {
               <Text style={styles.previewTitle}>Resumen del plan</Text>
             </View>
             <Text style={styles.previewAmount}>
-              {count} cuotas de <Text style={{ color: colors.primary, fontWeight: '800' }}>{formatCurrency(installmentAmount)}</Text>
+              {count} cuotas de{' '}
+              <Text style={{ color: colors.primary, fontWeight: '800' }}>
+                {formatCurrency(installmentAmount)}
+              </Text>
+              {frequency === 'biweekly' ? ' cada 15 días' : frequency === 'weekly' ? ' por semana' : ' por mes'}
             </Text>
+            {durationLabel(count, frequency) !== '' && (
+              <Text style={styles.previewDuration}>
+                Duración aproximada: {durationLabel(count, frequency)}
+              </Text>
+            )}
             <View style={styles.datesPreview}>
               {previewDates.map((d, i) => (
                 <View key={i} style={styles.dateChip}>
@@ -674,7 +713,8 @@ const styles = StyleSheet.create({
   installmentPreview: { backgroundColor: colors.primary + '15', borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: colors.primary + '44' },
   previewHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
   previewTitle: { fontSize: 13, fontWeight: '700', color: colors.primary },
-  previewAmount: { fontSize: 14, color: colors.text, marginBottom: 8 },
+  previewAmount: { fontSize: 14, color: colors.text, marginBottom: 4 },
+  previewDuration: { fontSize: 12, color: colors.textMuted, marginBottom: 8, fontStyle: 'italic' },
   datesPreview: { gap: 4 },
   dateChip: { backgroundColor: colors.bg, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
   dateChipText: { fontSize: 12, color: colors.textMuted },
