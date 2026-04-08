@@ -1,42 +1,25 @@
 import { useEffect, useState, useRef } from 'react';
-import { View, PanResponder, Animated, Dimensions, Platform } from 'react-native';
-
-async function reportLoginEvent(type: 'success' | 'failed', email: string, userId?: string) {
-  try {
-    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-    await fetch(`${supabaseUrl}/functions/v1/resend-email`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': supabaseAnonKey ?? '',
-        'Authorization': `Bearer ${supabaseAnonKey}`,
-      },
-      body: JSON.stringify({ type, email, userId, timestamp: new Date().toISOString(), platform: Platform.OS }),
-    });
-  } catch {}
-}
-
-const SCREEN_WIDTH = Dimensions.get('window').width;
+import { View, PanResponder } from 'react-native';
 import { Stack, useRouter, useSegments, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { initDatabase } from '../lib/database';
-import { cacheClear } from '../lib/cache';
 import { colors } from '../lib/colors';
 import { BottomTabBar } from '../components/BottomTabBar';
+import { ErrorBoundary } from '../components/ErrorBoundary';
+import { scheduleDailyDueNotification } from '../services/notifications';
 
-const SWIPE_TABS = ['/', '/clients', '/cobros', '/rutas', '/stock', '/settings'];
+const SWIPE_TABS = ['/', '/clients', '/cobros', '/gastos', '/stock', '/settings'];
 
 function getActiveTabPath(pathname: string): string {
   if (pathname === '/' || pathname === '') return '/';
   if (pathname.startsWith('/clients') || pathname.startsWith('/client') || pathname.startsWith('/sale')) return '/clients';
   if (pathname.startsWith('/cobros')) return '/cobros';
-  if (pathname.startsWith('/rutas') || pathname.startsWith('/zones')) return '/rutas';
+  if (pathname.startsWith('/gastos') || pathname.startsWith('/expense')) return '/gastos';
   if (pathname.startsWith('/stock') || pathname.startsWith('/product')) return '/stock';
-  if (pathname.startsWith('/settings') || pathname.startsWith('/proveedores') || pathname.startsWith('/supplier') || pathname.startsWith('/equipo') || pathname.startsWith('/reportes') || pathname.startsWith('/gastos') || pathname.startsWith('/expense')) return '/settings';
+  if (pathname.startsWith('/settings')) return '/settings';
   return '/';
 }
 
@@ -47,15 +30,12 @@ export default function RootLayout() {
   const segments = useSegments();
   const pathname = usePathname();
 
-  // Refs for PanResponder (closures don't capture changing state)
   const showTabBarRef = useRef(false);
   const currentTabIdxRef = useRef(0);
   const navigateRef = useRef<(path: string) => void>(() => {});
-  const slideAnim = useRef(new Animated.Value(0)).current;
-  const isAnimating = useRef(false);
 
   useEffect(() => {
-    navigateRef.current = (path: string) => router.navigate(path as any);
+    navigateRef.current = (path: string) => router.navigate(path as Parameters<typeof router.navigate>[0]);
   }, [router]);
 
   useEffect(() => {
@@ -66,68 +46,38 @@ export default function RootLayout() {
 
   const panResponder = useRef(
     PanResponder.create({
-      // Only claim gesture if horizontal swipe is dominant
       onMoveShouldSetPanResponder: (_, g) =>
         showTabBarRef.current &&
-        !isAnimating.current &&
-        Math.abs(g.dx) > 15 &&
-        Math.abs(g.dx) > Math.abs(g.dy) * 2.5,
-      onPanResponderMove: (_, g) => {
-        // Resist drag: move at 30% of finger speed so it feels elastic
-        slideAnim.setValue(g.dx * 0.3);
-      },
+        Math.abs(g.dx) > 20 &&
+        Math.abs(g.dx) > Math.abs(g.dy) * 2,
       onPanResponderTerminationRequest: () => true,
       onPanResponderRelease: (_, g) => {
         const idx = currentTabIdxRef.current;
-        const shouldNavigate =
-          (g.dx < -60 && idx < SWIPE_TABS.length - 1) ||
-          (g.dx > 60 && idx > 0);
-
-        if (shouldNavigate) {
-          isAnimating.current = true;
-          const toValue = g.dx < 0 ? -SCREEN_WIDTH * 0.3 : SCREEN_WIDTH * 0.3;
-          Animated.timing(slideAnim, {
-            toValue,
-            duration: 180,
-            useNativeDriver: true,
-          }).start(() => {
-            slideAnim.setValue(0);
-            isAnimating.current = false;
-            if (g.dx < 0) {
-              navigateRef.current(SWIPE_TABS[idx + 1]);
-            } else {
-              navigateRef.current(SWIPE_TABS[idx - 1]);
-            }
-          });
-        } else {
-          // Snap back with spring
-          Animated.spring(slideAnim, {
-            toValue: 0,
-            useNativeDriver: true,
-            tension: 120,
-            friction: 8,
-          }).start();
+        if (g.dx < -60 && idx < SWIPE_TABS.length - 1) {
+          navigateRef.current(SWIPE_TABS[idx + 1]);
+        } else if (g.dx > 60 && idx > 0) {
+          navigateRef.current(SWIPE_TABS[idx - 1]);
         }
       },
     })
   ).current;
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
       setLoading(false);
-      if (session) initDatabase();
+      if (s) {
+        initDatabase();
+        scheduleDailyDueNotification().catch(() => {});
+      }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') {
-        cacheClear();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+      if (s) {
+        initDatabase();
+        scheduleDailyDueNotification().catch(() => {});
       }
-      if (event === 'SIGNED_IN' && session?.user?.email) {
-        reportLoginEvent('success', session.user.email, session.user.id);
-      }
-      setSession(session);
-      if (session) initDatabase();
     });
 
     return () => subscription.unsubscribe();
@@ -150,37 +100,39 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <View style={{ flex: 1, backgroundColor: colors.bg }} {...panResponder.panHandlers}>
-        <StatusBar style="light" />
-        <Animated.View style={{ flex: 1, transform: [{ translateX: slideAnim }] }}>
-          <Stack
-            screenOptions={{
-              headerStyle: { backgroundColor: colors.surface },
-              headerTintColor: colors.text,
-              headerTitleStyle: { fontWeight: '700', fontSize: 17 },
-              contentStyle: { backgroundColor: colors.bg },
-            }}
-          >
-            <Stack.Screen name="login" options={{ headerShown: false }} />
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="client/new" options={{ title: 'Nuevo Cliente', presentation: 'modal' }} />
-            <Stack.Screen name="client/[id]" options={{ title: 'Cliente' }} />
-            <Stack.Screen name="sale/new" options={{ title: 'Nueva Venta', presentation: 'modal' }} />
-            <Stack.Screen name="sale/[id]" options={{ title: 'Detalle de Venta' }} />
-            <Stack.Screen name="product/new" options={{ title: 'Nuevo Producto', presentation: 'modal' }} />
-            <Stack.Screen name="product/[id]" options={{ title: 'Producto' }} />
-            <Stack.Screen name="zones" options={{ title: 'Zonas y Rutas' }} />
-            <Stack.Screen name="expense/new" options={{ title: 'Nuevo Gasto', presentation: 'modal' }} />
-            <Stack.Screen name="expense/[id]" options={{ title: 'Gasto' }} />
-            <Stack.Screen name="supplier/new" options={{ title: 'Nuevo Proveedor', presentation: 'modal' }} />
-            <Stack.Screen name="supplier/[id]" options={{ title: 'Proveedor' }} />
-            <Stack.Screen name="proveedores" options={{ title: 'Proveedores' }} />
-            <Stack.Screen name="equipo" options={{ title: 'Equipo' }} />
-            <Stack.Screen name="reportes" options={{ title: 'Reportes y Análisis' }} />
-          </Stack>
-        </Animated.View>
-        {showTabBar && <BottomTabBar />}
-      </View>
+      <ErrorBoundary>
+        <View style={{ flex: 1, backgroundColor: colors.bg }} {...panResponder.panHandlers}>
+          <StatusBar style="light" />
+          <View style={{ flex: 1 }}>
+            <Stack
+              screenOptions={{
+                headerStyle: { backgroundColor: colors.surface },
+                headerTintColor: colors.text,
+                headerTitleStyle: { fontWeight: '700', fontSize: 17 },
+                contentStyle: { backgroundColor: colors.bg },
+              }}
+            >
+              <Stack.Screen name="login" options={{ headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="client/new" options={{ title: 'Nuevo Cliente', presentation: 'modal' }} />
+              <Stack.Screen name="client/[id]" options={{ title: 'Cliente' }} />
+              <Stack.Screen name="sale/new" options={{ title: 'Nueva Venta', presentation: 'modal' }} />
+              <Stack.Screen name="sale/[id]" options={{ title: 'Detalle de Venta' }} />
+              <Stack.Screen name="product/new" options={{ title: 'Nuevo Producto', presentation: 'modal' }} />
+              <Stack.Screen name="product/[id]" options={{ title: 'Producto' }} />
+              <Stack.Screen name="zones" options={{ title: 'Zonas y Rutas' }} />
+              <Stack.Screen name="expense/new" options={{ title: 'Nuevo Gasto', presentation: 'modal' }} />
+              <Stack.Screen name="expense/[id]" options={{ title: 'Gasto' }} />
+              <Stack.Screen name="supplier/new" options={{ title: 'Nuevo Proveedor', presentation: 'modal' }} />
+              <Stack.Screen name="supplier/[id]" options={{ title: 'Proveedor' }} />
+              <Stack.Screen name="proveedores" options={{ title: 'Proveedores' }} />
+              <Stack.Screen name="equipo" options={{ title: 'Equipo' }} />
+              <Stack.Screen name="reportes" options={{ title: 'Reportes y Análisis' }} />
+            </Stack>
+          </View>
+          {showTabBar && <BottomTabBar />}
+        </View>
+      </ErrorBoundary>
     </SafeAreaProvider>
   );
 }

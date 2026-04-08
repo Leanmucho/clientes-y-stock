@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { Category, Client, Sale, SaleItem, Installment, Product, ClientPayment, Expense, Supplier, TeamMember } from '../types';
+import { Client, Sale, SaleItem, Installment, Product, ClientPayment, Expense, Supplier, TeamMember } from '../types';
 import { cacheGet, cacheSet, cacheInvalidate, cacheInvalidatePrefix } from './cache';
 
 export const EXPENSE_CATEGORIES = ['Alquiler', 'Servicios', 'Stock/Compras', 'Personal', 'Transporte', 'Marketing', 'Impuestos', 'Otro'];
@@ -10,14 +10,6 @@ const TTL_LONG  = 120_000;  // 2min — clients, products lists
 
 export async function initDatabase() {
   await markOverdueInstallments();
-}
-
-// Helper: obtiene el user_id de la sesión activa
-// Usado en todos los inserts para no depender solo del trigger de la DB
-async function getUserId(): Promise<string> {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user?.id) throw new Error('Sesión no encontrada. Cerrá sesión e ingresá nuevamente.');
-  return user.id;
 }
 
 // --- CLIENTS ---
@@ -36,22 +28,20 @@ export async function getClient(id: number): Promise<Client | null> {
 }
 
 export async function createClient(data: Omit<Client, 'id' | 'created_at'>): Promise<number> {
-  const user_id = await getUserId();
-  const { data: row, error } = await supabase.from('clients').insert({ ...data, user_id }).select('id').single();
-  if (error) throw new Error('No se pudo guardar el cliente. Intentá nuevamente.');
+  const { data: row, error } = await supabase.from('clients').insert(data).select('id').single();
+  if (error) throw error;
   cacheInvalidate('clients');
   return (row as any).id;
 }
 
 export async function updateClient(id: number, data: Omit<Client, 'id' | 'created_at'>) {
-  const { error } = await supabase.from('clients').update(data).eq('id', id);
-  if (error) throw new Error('No se pudo actualizar el cliente. Intentá nuevamente.');
+  await supabase.from('clients').update(data).eq('id', id);
   cacheInvalidate('clients', `client-${id}`);
 }
 
 export async function deleteClient(id: number) {
   const { error } = await supabase.from('clients').delete().eq('id', id);
-  if (error) throw new Error('No se pudo eliminar el cliente. Verificá que no tenga ventas activas.');
+  if (error) throw new Error(`Error al eliminar cliente: ${error.message}`);
   cacheInvalidate('clients', `client-${id}`);
   cacheInvalidatePrefix(`sales-client-${id}`);
 }
@@ -60,34 +50,26 @@ export async function deleteClient(id: number) {
 export async function getProducts(): Promise<Product[]> {
   const cached = cacheGet<Product[]>('products', TTL_LONG);
   if (cached) return cached;
-  const { data } = await supabase.from('products').select('*, categories(name)').order('name');
-  const result = ((data ?? []) as any[]).map(p => ({
-    ...p,
-    category_name: p.categories?.name ?? null,
-    categories: undefined,
-  })) as Product[];
+  const { data } = await supabase.from('products').select('*').order('name');
+  const result = (data ?? []) as Product[];
   cacheSet('products', result);
   return result;
 }
 
 export async function getProduct(id: number): Promise<Product | null> {
-  const { data } = await supabase.from('products').select('*, categories(name)').eq('id', id).single();
-  if (!data) return null;
-  const row = data as any;
-  return { ...row, category_name: row.categories?.name ?? null, categories: undefined } as Product;
+  const { data } = await supabase.from('products').select('*').eq('id', id).single();
+  return data as Product | null;
 }
 
 export async function createProduct(data: Omit<Product, 'id' | 'created_at'>): Promise<number> {
-  const user_id = await getUserId();
-  const { data: row, error } = await supabase.from('products').insert({ ...data, user_id }).select('id').single();
-  if (error) throw new Error('No se pudo guardar el producto. Intentá nuevamente.');
+  const { data: row, error } = await supabase.from('products').insert(data).select('id').single();
+  if (error) throw error;
   cacheInvalidate('products');
   return (row as any).id;
 }
 
 export async function updateProduct(id: number, data: Partial<Omit<Product, 'id' | 'created_at'>>) {
-  const { error } = await supabase.from('products').update(data).eq('id', id);
-  if (error) throw new Error(`Error al actualizar producto: ${error.message}`);
+  await supabase.from('products').update(data).eq('id', id);
   cacheInvalidate('products', `product-${id}`);
 }
 
@@ -98,32 +80,7 @@ export async function deleteProduct(id: number) {
 }
 
 export async function adjustStock(productId: number, delta: number) {
-  // Validación client-side antes de llamar al RPC
-  if (!Number.isInteger(productId) || productId <= 0) throw new Error('ID de producto inválido.');
-  if (!Number.isFinite(delta) || Math.abs(delta) > 100_000) throw new Error('Ajuste de stock fuera de rango.');
   await supabase.rpc('adjust_stock', { product_id: productId, delta });
-}
-
-// --- CATEGORIES ---
-export async function getCategories(): Promise<Category[]> {
-  const { data } = await supabase.from('categories').select('*').order('name');
-  return (data ?? []) as Category[];
-}
-
-export async function createCategory(name: string, description = ''): Promise<Category> {
-  const user_id = await getUserId();
-  const { data, error } = await supabase
-    .from('categories')
-    .insert({ name: name.trim(), description: description.trim(), user_id })
-    .select()
-    .single();
-  if (error) throw new Error('No se pudo crear la categoría. Intentá nuevamente.');
-  return data as Category;
-}
-
-export async function deleteCategory(id: number) {
-  const { error } = await supabase.from('categories').delete().eq('id', id);
-  if (error) throw new Error('No se pudo eliminar la categoría.');
 }
 
 // --- SALES ---
@@ -165,29 +122,26 @@ export async function createSale(
   data: Omit<Sale, 'id' | 'created_at' | 'client_name' | 'items'>,
   items: { product_id: number | null; product_name: string; quantity: number; unit_price: number }[]
 ): Promise<number> {
-  const user_id = await getUserId();
   const payload = {
     ...data,
-    user_id,
     delivery_date: data.delivery_date?.trim() || null,
     start_date: data.start_date?.trim() || new Date().toISOString().split('T')[0],
     notes: data.notes ?? '',
   };
 
   const { data: row, error } = await supabase.from('sales').insert(payload).select('id').single();
-  if (error) throw new Error('No se pudo registrar la venta. Intentá nuevamente.');
+  if (error) throw new Error(`Error al guardar la venta: ${error.message}`);
   const saleId = (row as any).id;
 
   if (items.length > 0) {
     const { error: itemsError } = await supabase
       .from('sale_items')
-      .insert(items.map(it => ({ ...it, sale_id: saleId, user_id })));
-    if (itemsError) throw new Error('No se pudieron guardar los productos de la venta.');
+      .insert(items.map(it => ({ ...it, sale_id: saleId })));
+    if (itemsError) throw new Error(`Error al guardar los productos: ${itemsError.message}`);
 
     for (const it of items) {
       if (it.product_id) {
-        const { error: stockErr } = await supabase.rpc('adjust_stock', { product_id: it.product_id, delta: -it.quantity });
-        if (stockErr) console.warn(`Stock adjustment failed for product ${it.product_id}: ${stockErr.message}`);
+        await supabase.rpc('adjust_stock', { product_id: it.product_id, delta: -it.quantity });
       }
     }
   }
@@ -230,22 +184,20 @@ export async function getClientPendingDebt(clientId: number): Promise<number> {
   return ((data ?? []) as any[]).reduce((acc, i) => acc + (i.expected_amount - i.paid_amount), 0);
 }
 
-// Retorna cuántas cuotas quedaron pagadas y si hubo excedente sin aplicar
 export async function registerAdvancePayment(
   clientId: number,
   amount: number,
   date: string,
   notes: string
-): Promise<{ installmentsPaid: number; surplus: number }> {
-  const user_id = await getUserId();
+) {
   const { error } = await supabase.from('client_payments').insert({
-    client_id: clientId, amount, date, notes, user_id,
+    client_id: clientId, amount, date, notes,
   });
-  if (error) throw new Error('No se pudo registrar el pago. Intentá nuevamente.');
+  if (error) throw new Error(`Error al registrar pago: ${error.message}`);
 
   const { data: sales } = await supabase.from('sales').select('id').eq('client_id', clientId);
   const saleIds = (sales ?? []).map((s: any) => s.id);
-  if (saleIds.length === 0) return { installmentsPaid: 0, surplus: amount };
+  if (saleIds.length === 0) return;
 
   const { data: installments } = await supabase
     .from('installments')
@@ -255,28 +207,18 @@ export async function registerAdvancePayment(
     .order('due_date');
 
   let remaining = amount;
-  let installmentsPaid = 0;
-
   for (const inst of (installments ?? []) as any[]) {
     if (remaining <= 0) break;
-    // Protección: saltar cuotas donde no hay nada por cobrar (expected <= paid)
     const stillOwed = inst.expected_amount - inst.paid_amount;
-    if (stillOwed <= 0) continue;
-
     const applying = Math.min(remaining, stillOwed);
     const newPaid = inst.paid_amount + applying;
     const newStatus = newPaid >= inst.expected_amount ? 'paid' : 'partial';
-    if (newStatus === 'paid') installmentsPaid++;
-
-    const { error: updErr } = await supabase
+    await supabase
       .from('installments')
       .update({ paid_amount: newPaid, paid_date: date, status: newStatus })
       .eq('id', inst.id);
-    if (updErr) throw new Error(`Error al aplicar pago a cuota ${inst.id}: ${updErr.message}`);
     remaining -= applying;
   }
-
-  return { installmentsPaid, surplus: Math.max(0, remaining) };
 }
 
 // --- INSTALLMENTS ---
@@ -290,17 +232,15 @@ export async function getInstallmentsBySale(saleId: number): Promise<Installment
 }
 
 export async function createInstallments(installments: Omit<Installment, 'id'>[]) {
-  const user_id = await getUserId();
-  const { error } = await supabase.from('installments').insert(installments.map(i => ({ ...i, user_id })));
-  if (error) throw new Error('No se pudieron crear las cuotas. Intentá nuevamente.');
+  const { error } = await supabase.from('installments').insert(installments);
+  if (error) throw new Error(`Error al crear cuotas: ${error.message}`);
 }
 
 export async function registerPayment(
   installmentId: number,
   paidAmount: number,
   paidDate: string,
-  notes: string,
-  dueDate?: string
+  notes: string
 ) {
   const { data: inst } = await supabase
     .from('installments')
@@ -314,23 +254,11 @@ export async function registerPayment(
   else if (paidAmount >= (inst as any).expected_amount) status = 'paid';
   else status = 'partial';
 
-  const update: Record<string, any> = { paid_amount: paidAmount, paid_date: paidDate || null, status, notes };
-  if (dueDate) update.due_date = dueDate;
-
   const { error } = await supabase
     .from('installments')
-    .update(update)
+    .update({ paid_amount: paidAmount, paid_date: paidDate || null, status, notes })
     .eq('id', installmentId);
   if (error) throw new Error(`Error al registrar pago: ${error.message}`);
-}
-
-// Guarda solo metadatos (vencimiento y notas) sin registrar pago
-export async function saveInstallmentMeta(installmentId: number, dueDate: string, notes: string) {
-  const { error } = await supabase
-    .from('installments')
-    .update({ due_date: dueDate, notes })
-    .eq('id', installmentId);
-  if (error) throw new Error(`Error al actualizar cuota: ${error.message}`);
 }
 
 // --- CLIENT EXPORT ---
@@ -395,24 +323,16 @@ export async function getDashboardStats() {
   const today = new Date().toISOString().split('T')[0];
   const thisMonth = today.substring(0, 7);
 
-  const [clientsRes, overdueRes, todayRes, collectedRes, lowStockRes, monthlySalesRes, todaySalesRes] = await Promise.all([
+  const [clientsRes, overdueRes, todayRes, collectedRes, lowStockRes] = await Promise.all([
     supabase.from('clients').select('id', { count: 'exact', head: true }),
     supabase.from('installments').select('id', { count: 'exact', head: true }).eq('status', 'overdue'),
-    supabase.from('installments').select('id', { count: 'exact', head: true }).lte('due_date', today).in('status', ['pending', 'partial', 'overdue']),
+    supabase.from('installments').select('id', { count: 'exact', head: true }).eq('due_date', today).in('status', ['pending', 'partial', 'overdue']),
     supabase.from('installments').select('paid_amount').like('paid_date', `${thisMonth}%`),
     supabase.from('products').select('id', { count: 'exact', head: true }).gt('min_stock', 0).filter('stock', 'lte', 'min_stock'),
-    supabase.from('sales').select('total_amount').like('created_at', `${thisMonth}%`),
-    supabase.from('sales').select('total_amount').like('created_at', `${today}%`),
   ]);
 
   const monthlyCollected = ((collectedRes.data ?? []) as any[]).reduce(
     (acc, r) => acc + (r.paid_amount ?? 0), 0
-  );
-  const monthlySales = ((monthlySalesRes.data ?? []) as any[]).reduce(
-    (acc, r) => acc + (r.total_amount ?? 0), 0
-  );
-  const todaySales = ((todaySalesRes.data ?? []) as any[]).reduce(
-    (acc, r) => acc + (r.total_amount ?? 0), 0
   );
 
   return {
@@ -421,24 +341,7 @@ export async function getDashboardStats() {
     todayCount: todayRes.count ?? 0,
     monthlyCollected,
     lowStockCount: lowStockRes.count ?? 0,
-    monthlySales,
-    todaySales,
   };
-}
-
-export async function getLowStockProducts(): Promise<Product[]> {
-  const { data } = await supabase
-    .from('products')
-    .select('*, categories(name)')
-    .gt('min_stock', 0)
-    .filter('stock', 'lte', 'min_stock')
-    .order('stock', { ascending: true })
-    .limit(10);
-  return ((data ?? []) as any[]).map(p => ({
-    ...p,
-    category_name: p.categories?.name ?? null,
-    categories: undefined,
-  })) as Product[];
 }
 
 export async function getOverallStats() {
@@ -559,8 +462,7 @@ export async function getExpensesByMonth(month: string): Promise<Expense[]> {
 }
 
 export async function createExpense(data: Omit<Expense, 'id' | 'created_at' | 'supplier_name'>): Promise<number> {
-  const user_id = await getUserId();
-  const { data: row, error } = await supabase.from('expenses').insert({ ...data, user_id }).select('id').single();
+  const { data: row, error } = await supabase.from('expenses').insert(data).select('id').single();
   if (error) throw new Error(`Error al guardar gasto: ${error.message}`);
   return (row as any).id;
 }
@@ -606,8 +508,7 @@ export async function getSupplier(id: number): Promise<Supplier | null> {
 }
 
 export async function createSupplier(data: Omit<Supplier, 'id' | 'created_at'>): Promise<number> {
-  const user_id = await getUserId();
-  const { data: row, error } = await supabase.from('suppliers').insert({ ...data, user_id }).select('id').single();
+  const { data: row, error } = await supabase.from('suppliers').insert(data).select('id').single();
   if (error) throw new Error(`Error al guardar proveedor: ${error.message}`);
   return (row as any).id;
 }
@@ -638,8 +539,7 @@ export async function getTeamMembers(): Promise<TeamMember[]> {
 }
 
 export async function createTeamMember(data: Omit<TeamMember, 'id' | 'created_at'>): Promise<number> {
-  const user_id = await getUserId();
-  const { data: row, error } = await supabase.from('team_members').insert({ ...data, user_id }).select('id').single();
+  const { data: row, error } = await supabase.from('team_members').insert(data).select('id').single();
   if (error) throw new Error(`Error al guardar miembro: ${error.message}`);
   return (row as any).id;
 }
@@ -703,100 +603,6 @@ export async function getBusinessAnalytics() {
   };
 }
 
-// --- EXPORTS ESPECÍFICOS ---
-export async function getSalesExport() {
-  const { data } = await supabase
-    .from('sales')
-    .select('*, clients(name)')
-    .order('created_at', { ascending: false });
-  return ((data ?? []) as any[]).map(s => ({
-    id: s.id,
-    fecha: s.created_at?.split('T')[0] ?? '',
-    cliente: s.clients?.name ?? '',
-    producto: s.product_name,
-    total: s.total_amount,
-    anticipo: s.advance_payment,
-    cuotas: s.installments_count,
-    valor_cuota: s.installment_amount,
-    frecuencia: s.installment_frequency ?? 'monthly',
-    inicio: s.start_date ?? '',
-    entrega: s.delivery_date ?? '',
-    notas: s.notes ?? '',
-  }));
-}
-
-export async function getDebtorsExport() {
-  const { data: clients } = await supabase.from('clients').select('id, name, phone, zone');
-  const { data: sales } = await supabase.from('sales').select('id, client_id');
-  const saleIds = (sales ?? []).map((s: any) => s.id);
-  const saleByClient: Record<number, number[]> = {};
-  for (const s of (sales ?? []) as any[]) {
-    if (!saleByClient[s.client_id]) saleByClient[s.client_id] = [];
-    saleByClient[s.client_id].push(s.id);
-  }
-  if (saleIds.length === 0) return [];
-  const { data: insts } = await supabase
-    .from('installments')
-    .select('sale_id, expected_amount, paid_amount, due_date, status')
-    .in('sale_id', saleIds)
-    .in('status', ['pending', 'partial', 'overdue']);
-  const debtByClient: Record<number, { debt: number; overdue: number }> = {};
-  for (const i of (insts ?? []) as any[]) {
-    const saleRow = (sales ?? []).find((s: any) => s.id === i.sale_id) as any;
-    if (!saleRow) continue;
-    const cid = saleRow.client_id;
-    if (!debtByClient[cid]) debtByClient[cid] = { debt: 0, overdue: 0 };
-    const owed = i.expected_amount - i.paid_amount;
-    debtByClient[cid].debt += owed;
-    if (i.status === 'overdue') debtByClient[cid].overdue += owed;
-  }
-  return ((clients ?? []) as any[])
-    .filter(c => (debtByClient[c.id]?.debt ?? 0) > 0)
-    .map(c => ({
-      cliente: c.name,
-      telefono: c.phone ?? '',
-      zona: c.zone ?? '',
-      deuda_total: debtByClient[c.id]?.debt ?? 0,
-      deuda_vencida: debtByClient[c.id]?.overdue ?? 0,
-    }))
-    .sort((a, b) => b.deuda_total - a.deuda_total);
-}
-
-export async function getInventoryExport() {
-  const { data } = await supabase
-    .from('products')
-    .select('*, categories(name)')
-    .order('name');
-  return ((data ?? []) as any[]).map(p => ({
-    nombre: p.name,
-    descripcion: p.description ?? '',
-    categoria: p.categories?.name ?? '',
-    precio: p.price,
-    stock: p.stock,
-    stock_minimo: p.min_stock,
-    estado: p.stock === 0 ? 'Sin stock' : p.stock <= p.min_stock ? 'Stock bajo' : 'OK',
-    valor_inventario: p.price * p.stock,
-  }));
-}
-
-export async function bulkUpdateStockByName(rows: { name: string; stock: number }[]): Promise<{ updated: number; notFound: string[] }> {
-  const { data: products } = await supabase.from('products').select('id, name');
-  const productMap = new Map<string, number>();
-  for (const p of (products ?? []) as any[]) {
-    productMap.set(p.name.toLowerCase().trim(), p.id);
-  }
-  let updated = 0;
-  const notFound: string[] = [];
-  for (const row of rows) {
-    const id = productMap.get(row.name.toLowerCase().trim());
-    if (!id) { notFound.push(row.name); continue; }
-    if (!Number.isFinite(row.stock) || row.stock < 0) continue;
-    const { error } = await supabase.from('products').update({ stock: row.stock }).eq('id', id);
-    if (!error) updated++;
-  }
-  return { updated, notFound };
-}
-
 // --- EXPORT ---
 export async function exportAllData() {
   const [clients, products, sales, saleItems, installments] = await Promise.all([
@@ -821,4 +627,123 @@ export async function exportAllData() {
       sales: undefined,
     })),
   };
+}
+
+// --- BULK STOCK IMPORT ---
+export async function bulkUpdateStockByName(
+  rows: { name: string; stock: number }[]
+): Promise<{ updated: number; notFound: string[] }> {
+  const { data: products } = await supabase.from('products').select('id, name');
+  const productMap = new Map<string, number>();
+  for (const p of (products ?? []) as { id: number; name: string }[]) {
+    productMap.set(p.name.toLowerCase().trim(), p.id);
+  }
+
+  let updated = 0;
+  const notFound: string[] = [];
+
+  for (const row of rows) {
+    const key = row.name.toLowerCase().trim();
+    const id = productMap.get(key);
+    if (!id) { notFound.push(row.name); continue; }
+    const { error } = await supabase.from('products').update({ stock: row.stock }).eq('id', id);
+    if (!error) updated++;
+  }
+
+  cacheInvalidatePrefix('products');
+  return { updated, notFound };
+}
+
+// --- EXPORT HELPERS ---
+export async function getSalesExport() {
+  const { data } = await supabase
+    .from('sales')
+    .select('id, created_at, total_amount, paid_amount, status, product_name, notes, clients(name)')
+    .order('created_at', { ascending: false });
+  return ((data ?? []) as any[]).map(s => ({
+    id: s.id,
+    fecha: s.created_at?.split('T')[0] ?? '',
+    cliente: s.clients?.name ?? '',
+    producto: s.product_name ?? '',
+    total: s.total_amount,
+    pagado: s.paid_amount,
+    estado: s.status,
+    notas: s.notes ?? '',
+  }));
+}
+
+export async function getDebtorsExport() {
+  const { data } = await supabase
+    .from('clients')
+    .select('id, name, phone, zone, sales(total_amount, paid_amount, status)')
+    .order('name');
+  return ((data ?? []) as any[])
+    .map(c => {
+      const sales = (c.sales ?? []) as any[];
+      const debt = sales
+        .filter((s: any) => s.status !== 'paid')
+        .reduce((acc: number, s: any) => acc + (s.total_amount - s.paid_amount), 0);
+      return { nombre: c.name, telefono: c.phone ?? '', zona: c.zone ?? '', deuda: debt };
+    })
+    .filter(c => c.deuda > 0)
+    .sort((a, b) => b.deuda - a.deuda);
+}
+
+export async function getInventoryExport() {
+  const { data } = await supabase
+    .from('products')
+    .select('name, description, price, stock, min_stock, categories(name)')
+    .order('name');
+  return ((data ?? []) as any[]).map(p => ({
+    nombre: p.name,
+    descripcion: p.description ?? '',
+    precio: p.price,
+    stock: p.stock,
+    stock_minimo: p.min_stock,
+    categoria: (p.categories as any)?.name ?? '',
+    estado: p.stock === 0 ? 'Sin stock' : p.stock <= p.min_stock ? 'Stock bajo' : 'OK',
+  }));
+}
+
+export async function getLowStockProducts(limit = 10): Promise<
+  { id: number; name: string; stock: number; min_stock: number; price: number }[]
+> {
+  const { data } = await supabase
+    .from('products')
+    .select('id, name, stock, min_stock, price')
+    .gt('min_stock', 0)
+    .order('stock', { ascending: true })
+    .limit(limit);
+  return ((data ?? []) as { id: number; name: string; stock: number; min_stock: number; price: number }[])
+    .filter((p) => p.stock <= p.min_stock);
+}
+
+export async function getWeeklySalesSummary(): Promise<
+  { day: string; label: string; total: number }[]
+> {
+  const now = new Date();
+  const days: { day: string; label: string; total: number }[] = [];
+
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const iso = d.toISOString().split('T')[0];
+    const label = d.toLocaleDateString('es-AR', { weekday: 'short' });
+    days.push({ day: iso, label, total: 0 });
+  }
+
+  const fromDate = days[0].day;
+  const { data } = await supabase
+    .from('installments')
+    .select('paid_date, paid_amount')
+    .gte('paid_date', fromDate)
+    .eq('status', 'paid');
+
+  for (const row of (data ?? []) as { paid_date: string | null; paid_amount: number }[]) {
+    if (!row.paid_date) continue;
+    const entry = days.find((d) => d.day === row.paid_date);
+    if (entry) entry.total += row.paid_amount ?? 0;
+  }
+
+  return days;
 }
