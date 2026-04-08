@@ -6,7 +6,9 @@ import {
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
-import { markOverdueInstallments, registerPayment } from '../../lib/database';
+import { markOverdueInstallments, registerPayment, getClient, getSale } from '../../lib/database';
+import { generateAndShareReceipt } from '../../services/pdfService';
+import { Installment } from '../../types';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatDate, getStatusColor, getStatusLabel } from '../../lib/utils';
 import { Loading } from '../../components/Loading';
@@ -112,16 +114,55 @@ export default function CobrosScreen() {
       return;
     }
     setPaying(true);
+    const today = new Date().toISOString().split('T')[0];
+    const target = payTarget;
+    const notes = payNotes;
     try {
-      const today = new Date().toISOString().split('T')[0];
-      await registerPayment(payTarget.id, amount, today, payNotes);
+      await registerPayment(target.id, amount, today, notes);
       closePaySheet();
       await load();
-    } catch (e: any) {
-      Alert.alert('Error', e.message ?? 'No se pudo registrar el pago.');
+      offerReceiptAfterPay(target, amount, today, notes);
+    } catch (e: unknown) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo registrar el pago.');
     } finally {
       setPaying(false);
     }
+  };
+
+  const offerReceiptAfterPay = (item: PendingItem, amount: number, date: string, notes: string) => {
+    Alert.alert(
+      'Pago registrado ✓',
+      `${item.client_name} — ${formatCurrency(amount)}`,
+      [
+        { text: 'Cerrar', style: 'cancel' },
+        {
+          text: '📄 Recibo PDF',
+          onPress: async () => {
+            try {
+              const [client, sale] = await Promise.all([
+                getClient(item.client_id),
+                getSale(item.sale_id),
+              ]);
+              if (!client || !sale) throw new Error('Datos incompletos');
+              const installment: Installment = {
+                id: item.id,
+                sale_id: item.sale_id,
+                installment_number: item.installment_number,
+                due_date: item.due_date,
+                expected_amount: item.expected_amount,
+                paid_amount: amount,
+                paid_date: date,
+                status: amount >= item.expected_amount ? 'paid' : 'partial',
+                notes,
+              };
+              await generateAndShareReceipt({ installment, sale, client, paidAmount: amount, paidDate: date });
+            } catch (e: unknown) {
+              Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo generar el recibo.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   if (loading) return <Loading />;

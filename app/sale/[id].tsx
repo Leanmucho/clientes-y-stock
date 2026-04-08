@@ -5,7 +5,8 @@ import {
 } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getSale, getSaleItems, getInstallmentsBySale, registerPayment, updateSale, deleteSale } from '../../lib/database';
+import { getSale, getSaleItems, getInstallmentsBySale, registerPayment, updateSale, deleteSale, getClient } from '../../lib/database';
+import { generateAndShareReceipt } from '../../services/pdfService';
 import { supabase } from '../../lib/supabase';
 import { Sale, SaleItem, Installment } from '../../types';
 import { colors } from '../../lib/colors';
@@ -70,13 +71,41 @@ export default function SaleDetailScreen() {
     if (isNaN(amount) || amount < 0) return Alert.alert('Inválido', 'Ingresá un monto válido.');
     setRegistering(true);
     await registerPayment(paymentModal.id, amount, payDate, payNotes);
+    const closedInst = paymentModal;
     setPaymentModal(null);
     setRegistering(false);
     await load();
-    // Share receipt option
     if (sale && amount > 0) {
-      const inst = installments.find(i => i.id === paymentModal.id);
-      shareReceipt(sale, paymentModal, amount, payDate);
+      offerReceipt(sale, closedInst, amount, payDate);
+    }
+  };
+
+  const offerReceipt = (s: Sale, inst: Installment, amount: number, date: string) => {
+    Alert.alert(
+      'Pago registrado ✓',
+      '¿Qué querés hacer?',
+      [
+        { text: 'Cerrar', style: 'cancel' },
+        {
+          text: '📄 Recibo PDF',
+          onPress: () => generatePdfReceipt(s, inst, amount, date),
+        },
+        {
+          text: '💬 Compartir texto',
+          onPress: () => shareReceipt(s, inst, amount, date),
+        },
+      ]
+    );
+  };
+
+  const generatePdfReceipt = async (s: Sale, inst: Installment, amount: number, date: string) => {
+    if (!s.client_id) return;
+    try {
+      const client = await getClient(s.client_id);
+      if (!client) throw new Error('Cliente no encontrado');
+      await generateAndShareReceipt({ installment: inst, sale: s, client, paidAmount: amount, paidDate: date });
+    } catch (e: unknown) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo generar el recibo.');
     }
   };
 
@@ -291,7 +320,21 @@ export default function SaleDetailScreen() {
               )}
               {inst.notes ? <Text style={styles.notes}>{inst.notes}</Text> : null}
             </View>
-            <Ionicons name="pencil" size={14} color={colors.textDim} />
+            <View style={styles.instActions}>
+              {inst.paid_amount > 0 && sale && (
+                <TouchableOpacity
+                  style={styles.pdfBtn}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    generatePdfReceipt(sale, inst, inst.paid_amount, inst.paid_date ?? getTodayISO());
+                  }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="document-text-outline" size={15} color={colors.primary} />
+                </TouchableOpacity>
+              )}
+              <Ionicons name="pencil" size={14} color={colors.textDim} />
+            </View>
           </TouchableOpacity>
         ))}
 
@@ -501,6 +544,8 @@ const styles = StyleSheet.create({
   instNumber: { width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginTop: 2 },
   instNumberText: { fontWeight: '800', fontSize: 14 },
   instInfo: { flex: 1 },
+  instActions: { alignItems: 'center', gap: 8 },
+  pdfBtn: { padding: 4, backgroundColor: colors.primary + '18', borderRadius: 7 },
   instRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   instDue: { fontSize: 12, color: colors.textMuted, fontWeight: '500' },
   statusPill: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
