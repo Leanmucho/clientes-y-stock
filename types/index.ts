@@ -1,3 +1,10 @@
+export interface Category {
+  id: number;
+  name: string;
+  description: string;
+  created_at: string;
+}
+
 export interface Client {
   id: number;
   name: string;
@@ -17,6 +24,9 @@ export interface Product {
   stock: number;
   min_stock: number;
   image_url: string;
+  category_id: number | null;
+  category_name?: string;
+  barcode?: string;
   created_at: string;
 }
 
@@ -29,6 +39,10 @@ export interface SaleItem {
   unit_price: number;
 }
 
+export type InstallmentFrequency = 'weekly' | 'biweekly' | 'monthly';
+export type InstallmentStatus = 'pending' | 'partial' | 'paid' | 'overdue';
+export type SaleStatus = 'active' | 'completed' | 'cancelled';
+
 export interface Sale {
   id: number;
   client_id: number;
@@ -36,12 +50,15 @@ export interface Sale {
   product_name: string;
   total_amount: number;
   advance_payment: number;
+  paid_amount?: number;
   installments_count: number;
   installment_amount: number;
+  installment_frequency: InstallmentFrequency;
   payment_day: number;
   start_date: string;
   delivery_date: string;
   notes: string;
+  status?: SaleStatus;
   created_at: string;
   items?: SaleItem[];
 }
@@ -63,8 +80,14 @@ export interface Installment {
   expected_amount: number;
   paid_amount: number;
   paid_date: string | null;
-  status: 'pending' | 'partial' | 'paid' | 'overdue';
+  status: InstallmentStatus;
   notes: string;
+  created_at?: string;
+}
+
+export interface TodayInstallment extends Installment {
+  client_name: string;
+  product_name: string;
 }
 
 export interface Expense {
@@ -100,4 +123,59 @@ export interface TeamMember {
   commission_rate: number;
   active: boolean;
   created_at: string;
+}
+
+export interface DashboardStats {
+  totalClients: number;
+  overdueCount: number;
+  todayCount: number;
+  monthlyCollected: number;
+  lowStockCount: number;
+}
+
+export interface MonthlyStat {
+  month: string;
+  collected: number;
+}
+
+export interface MonthlyExpenseStat {
+  month: string;
+  amount: number;
+}
+
+export interface WeeklySaleStat {
+  day: string;
+  label: string;
+  total: number;
+}
+
+export interface LowStockProduct {
+  id: number;
+  name: string;
+  stock: number;
+  min_stock: number;
+  price: number;
+}
+
+export interface CashSummary {
+  date: string;
+  expectedCash: number;
+  collectedCash: number;
+  difference: number;
+  surplus: boolean;
+  breakdown: CashBreakdownItem[];
+}
+
+export interface CashBreakdownItem {
+  clientName: string;
+  amount: number;
+  installmentNumber: number;
+}
+
+export interface ReceiptData {
+  installment: Installment;
+  sale: Sale;
+  client: Client;
+  paidAmount: number;
+  paidDate: string;
 }

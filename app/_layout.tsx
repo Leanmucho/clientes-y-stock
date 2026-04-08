@@ -8,6 +8,8 @@ import { supabase } from '../lib/supabase';
 import { initDatabase } from '../lib/database';
 import { colors } from '../lib/colors';
 import { BottomTabBar } from '../components/BottomTabBar';
+import { ErrorBoundary } from '../components/ErrorBoundary';
+import { scheduleDailyDueNotification } from '../services/notifications';
 
 const SWIPE_TABS = ['/', '/clients', '/cobros', '/gastos', '/stock', '/settings'];
 
@@ -28,13 +30,12 @@ export default function RootLayout() {
   const segments = useSegments();
   const pathname = usePathname();
 
-  // Refs for PanResponder (closures don't capture changing state)
   const showTabBarRef = useRef(false);
   const currentTabIdxRef = useRef(0);
   const navigateRef = useRef<(path: string) => void>(() => {});
 
   useEffect(() => {
-    navigateRef.current = (path: string) => router.navigate(path as any);
+    navigateRef.current = (path: string) => router.navigate(path as Parameters<typeof router.navigate>[0]);
   }, [router]);
 
   useEffect(() => {
@@ -45,7 +46,6 @@ export default function RootLayout() {
 
   const panResponder = useRef(
     PanResponder.create({
-      // Only claim gesture if horizontal swipe is dominant
       onMoveShouldSetPanResponder: (_, g) =>
         showTabBarRef.current &&
         Math.abs(g.dx) > 20 &&
@@ -63,15 +63,21 @@ export default function RootLayout() {
   ).current;
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
       setLoading(false);
-      if (session) initDatabase();
+      if (s) {
+        initDatabase();
+        scheduleDailyDueNotification().catch(() => {});
+      }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) initDatabase();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+      if (s) {
+        initDatabase();
+        scheduleDailyDueNotification().catch(() => {});
+      }
     });
 
     return () => subscription.unsubscribe();
@@ -94,37 +100,39 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <View style={{ flex: 1, backgroundColor: colors.bg }} {...panResponder.panHandlers}>
-        <StatusBar style="light" />
-        <View style={{ flex: 1 }}>
-          <Stack
-            screenOptions={{
-              headerStyle: { backgroundColor: colors.surface },
-              headerTintColor: colors.text,
-              headerTitleStyle: { fontWeight: '700', fontSize: 17 },
-              contentStyle: { backgroundColor: colors.bg },
-            }}
-          >
-            <Stack.Screen name="login" options={{ headerShown: false }} />
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="client/new" options={{ title: 'Nuevo Cliente', presentation: 'modal' }} />
-            <Stack.Screen name="client/[id]" options={{ title: 'Cliente' }} />
-            <Stack.Screen name="sale/new" options={{ title: 'Nueva Venta', presentation: 'modal' }} />
-            <Stack.Screen name="sale/[id]" options={{ title: 'Detalle de Venta' }} />
-            <Stack.Screen name="product/new" options={{ title: 'Nuevo Producto', presentation: 'modal' }} />
-            <Stack.Screen name="product/[id]" options={{ title: 'Producto' }} />
-            <Stack.Screen name="zones" options={{ title: 'Zonas y Rutas' }} />
-            <Stack.Screen name="expense/new" options={{ title: 'Nuevo Gasto', presentation: 'modal' }} />
-            <Stack.Screen name="expense/[id]" options={{ title: 'Gasto' }} />
-            <Stack.Screen name="supplier/new" options={{ title: 'Nuevo Proveedor', presentation: 'modal' }} />
-            <Stack.Screen name="supplier/[id]" options={{ title: 'Proveedor' }} />
-            <Stack.Screen name="proveedores" options={{ title: 'Proveedores' }} />
-            <Stack.Screen name="equipo" options={{ title: 'Equipo' }} />
-            <Stack.Screen name="reportes" options={{ title: 'Reportes y Análisis' }} />
-          </Stack>
+      <ErrorBoundary>
+        <View style={{ flex: 1, backgroundColor: colors.bg }} {...panResponder.panHandlers}>
+          <StatusBar style="light" />
+          <View style={{ flex: 1 }}>
+            <Stack
+              screenOptions={{
+                headerStyle: { backgroundColor: colors.surface },
+                headerTintColor: colors.text,
+                headerTitleStyle: { fontWeight: '700', fontSize: 17 },
+                contentStyle: { backgroundColor: colors.bg },
+              }}
+            >
+              <Stack.Screen name="login" options={{ headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="client/new" options={{ title: 'Nuevo Cliente', presentation: 'modal' }} />
+              <Stack.Screen name="client/[id]" options={{ title: 'Cliente' }} />
+              <Stack.Screen name="sale/new" options={{ title: 'Nueva Venta', presentation: 'modal' }} />
+              <Stack.Screen name="sale/[id]" options={{ title: 'Detalle de Venta' }} />
+              <Stack.Screen name="product/new" options={{ title: 'Nuevo Producto', presentation: 'modal' }} />
+              <Stack.Screen name="product/[id]" options={{ title: 'Producto' }} />
+              <Stack.Screen name="zones" options={{ title: 'Zonas y Rutas' }} />
+              <Stack.Screen name="expense/new" options={{ title: 'Nuevo Gasto', presentation: 'modal' }} />
+              <Stack.Screen name="expense/[id]" options={{ title: 'Gasto' }} />
+              <Stack.Screen name="supplier/new" options={{ title: 'Nuevo Proveedor', presentation: 'modal' }} />
+              <Stack.Screen name="supplier/[id]" options={{ title: 'Proveedor' }} />
+              <Stack.Screen name="proveedores" options={{ title: 'Proveedores' }} />
+              <Stack.Screen name="equipo" options={{ title: 'Equipo' }} />
+              <Stack.Screen name="reportes" options={{ title: 'Reportes y Análisis' }} />
+            </Stack>
+          </View>
+          {showTabBar && <BottomTabBar />}
         </View>
-        {showTabBar && <BottomTabBar />}
-      </View>
+      </ErrorBoundary>
     </SafeAreaProvider>
   );
 }

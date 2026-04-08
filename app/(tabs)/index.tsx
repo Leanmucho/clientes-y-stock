@@ -1,151 +1,190 @@
-import { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useState } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl,
+  Dimensions, Platform,
+} from 'react-native';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getDashboardStats, getTodayInstallments, getMonthlyStats, getMonthlyExpenseStats } from '../../lib/database';
+import { LineChart } from 'react-native-chart-kit';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatDate, getStatusColor, getStatusLabel } from '../../lib/utils';
-import { Loading } from '../../components/Loading';
+import { DashboardSkeleton } from '../../components/SkeletonLoader';
+import { useDashboard } from '../../hooks/useDashboard';
+import type { TodayInstallment, LowStockProduct, WeeklySaleStat } from '../../types';
 
 type FilterStatus = 'all' | 'overdue' | 'pending' | 'partial';
 
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const CHART_WIDTH = Math.min(SCREEN_WIDTH - 32, 600);
+
+const FILTERS: { key: FilterStatus; label: string; color: string }[] = [
+  { key: 'all', label: 'Todos', color: colors.primary },
+  { key: 'overdue', label: 'Vencidas', color: colors.danger },
+  { key: 'partial', label: 'Parcial', color: colors.warning },
+  { key: 'pending', label: 'Pendiente', color: colors.textDim },
+];
+
 export default function DashboardScreen() {
   const router = useRouter();
-  const [stats, setStats] = useState({ totalClients: 0, overdueCount: 0, todayCount: 0, monthlyCollected: 0, lowStockCount: 0 });
-  const [pending, setPending] = useState<any[]>([]);
-  const [monthly, setMonthly] = useState<{ month: string; collected: number }[]>([]);
-  const [monthlyExp, setMonthlyExp] = useState<{ month: string; amount: number }[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const { stats, pending, monthly, monthlyExp, lowStock, weekly, loading, refreshing, error, refresh } = useDashboard();
   const [filter, setFilter] = useState<FilterStatus>('all');
-  const [showMonthly, setShowMonthly] = useState(false);
+  const [showChart, setShowChart] = useState(false);
 
-  const load = useCallback(async () => {
-    const [s, p, m, me] = await Promise.all([getDashboardStats(), getTodayInstallments(), getMonthlyStats(), getMonthlyExpenseStats()]);
-    setStats(s); setPending(p); setMonthly(m); setMonthlyExp(me); setLoading(false);
-  }, []);
+  if (loading) return <DashboardSkeleton />;
 
-  useFocusEffect(useCallback(() => {
-    let active = true;
-    Promise.all([getDashboardStats(), getTodayInstallments(), getMonthlyStats(), getMonthlyExpenseStats()]).then(([s, p, m, me]) => {
-      if (!active) return;
-      setStats(s); setPending(p); setMonthly(m); setMonthlyExp(me); setLoading(false);
-    });
-    setLoading(false);
-    return () => { active = false; };
-  }, []));
+  const filtered: TodayInstallment[] =
+    filter === 'all' ? pending : pending.filter((i) => i.status === filter);
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true); await load(); setRefreshing(false);
-  }, [load]);
-
-  if (loading) return <Loading />;
-
-  const filtered = filter === 'all' ? pending : pending.filter(i => i.status === filter);
-
-  const maxMonthly = Math.max(...monthly.map(m => m.collected), 1);
   const thisMonth = new Date().toISOString().substring(0, 7);
-  const monthlyExpTotal = monthlyExp.find(m => m.month === thisMonth)?.amount ?? 0;
+  const monthlyExpTotal = monthlyExp.find((m) => m.month === thisMonth)?.amount ?? 0;
   const netThisMonth = stats.monthlyCollected - monthlyExpTotal;
 
-  const FILTERS: { key: FilterStatus; label: string; color: string }[] = [
-    { key: 'all', label: 'Todos', color: colors.primary },
-    { key: 'overdue', label: 'Vencidas', color: colors.danger },
-    { key: 'partial', label: 'Parcial', color: colors.warning },
-    { key: 'pending', label: 'Pendiente', color: colors.textDim },
-  ];
+  const chartLabels = weekly.map((w) => w.label);
+  const chartData = weekly.map((w) => w.total);
+  const hasChartData = chartData.some((v) => v > 0);
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.primary} />
+      }
+    >
+      {error ? (
+        <View style={styles.errorCard}>
+          <Ionicons name="alert-circle" size={18} color={colors.danger} />
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity onPress={refresh}>
+            <Ionicons name="refresh" size={18} color={colors.primary} />
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
-      {/* Stats */}
+      {/* Stat widgets */}
       <View style={styles.statsRow}>
-        <StatCard icon="people" label="Clientes" value={stats.totalClients.toString()} color={colors.primary} />
-        <StatCard icon="today" label="Cobros hoy" value={stats.todayCount.toString()} color={colors.warning} />
-        <StatCard icon="alert-circle" label="Vencidas" value={stats.overdueCount.toString()} color={colors.danger} />
+        <StatCard icon="people" label="Clientes" value={stats.totalClients} color={colors.primary} onPress={() => router.push('/clients')} />
+        <StatCard icon="today" label="Cobros hoy" value={stats.todayCount} color={colors.warning} />
+        <StatCard icon="alert-circle" label="Vencidas" value={stats.overdueCount} color={colors.danger} />
       </View>
 
       {/* P&L row */}
       <View style={styles.plRow}>
-        <TouchableOpacity style={[styles.plCard, { borderLeftColor: colors.success }]} onPress={() => setShowMonthly(v => !v)} activeOpacity={0.8}>
-          <Text style={styles.plLabel}>Cobrado</Text>
-          <Text style={[styles.plValue, { color: colors.success }]}>{formatCurrency(stats.monthlyCollected)}</Text>
+        <TouchableOpacity
+          style={[styles.plCard, { borderLeftColor: colors.success }]}
+          onPress={() => setShowChart((v) => !v)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.plLabel}>Cobrado este mes</Text>
+          <Text style={[styles.plValue, { color: colors.success }]}>
+            {formatCurrency(stats.monthlyCollected)}
+          </Text>
+          <Text style={styles.plHint}>
+            <Ionicons name={showChart ? 'chevron-up' : 'bar-chart-outline'} size={11} /> ver semanal
+          </Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.plCard, { borderLeftColor: colors.danger }]} onPress={() => router.push('/gastos')} activeOpacity={0.8}>
-          <Text style={styles.plLabel}>Gastos</Text>
-          <Text style={[styles.plValue, { color: colors.danger }]}>{formatCurrency(monthlyExpTotal)}</Text>
+        <TouchableOpacity
+          style={[styles.plCard, { borderLeftColor: colors.danger }]}
+          onPress={() => router.push('/gastos')}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.plLabel}>Gastos este mes</Text>
+          <Text style={[styles.plValue, { color: colors.danger }]}>
+            {formatCurrency(monthlyExpTotal)}
+          </Text>
+          <Text style={styles.plHint}>
+            <Ionicons name="chevron-forward" size={11} /> ver detalle
+          </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Net card */}
-      <TouchableOpacity style={[styles.netCard, { borderLeftColor: netThisMonth >= 0 ? colors.success : colors.danger }]} onPress={() => router.push('/reportes')} activeOpacity={0.8}>
-        <Ionicons name={netThisMonth >= 0 ? 'trending-up' : 'trending-down'} size={18} color={netThisMonth >= 0 ? colors.success : colors.danger} />
+      {/* Net result */}
+      <TouchableOpacity
+        style={[styles.netCard, { borderLeftColor: netThisMonth >= 0 ? colors.success : colors.danger }]}
+        onPress={() => router.push('/reportes')}
+        activeOpacity={0.8}
+      >
+        <Ionicons
+          name={netThisMonth >= 0 ? 'trending-up' : 'trending-down'}
+          size={18}
+          color={netThisMonth >= 0 ? colors.success : colors.danger}
+        />
         <View style={{ flex: 1, marginLeft: 10 }}>
-          <Text style={styles.netLabel}>Resultado neto este mes</Text>
+          <Text style={styles.netLabel}>Resultado neto — este mes</Text>
           <Text style={[styles.netValue, { color: netThisMonth >= 0 ? colors.success : colors.danger }]}>
             {netThisMonth >= 0 ? '+' : ''}{formatCurrency(netThisMonth)}
           </Text>
         </View>
-        <Ionicons name="bar-chart-outline" size={16} color={colors.textDim} />
+        <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
       </TouchableOpacity>
 
-      {/* Monthly chart */}
-      {showMonthly && (
+      {/* Weekly chart */}
+      {showChart && hasChartData && Platform.OS !== 'web' && (
         <View style={styles.chartCard}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <Text style={styles.chartTitle}>Cobrado por mes (últimos 12 meses)</Text>
-            <TouchableOpacity onPress={() => setShowMonthly(false)}>
-              <Ionicons name="chevron-up" size={16} color={colors.textDim} />
-            </TouchableOpacity>
-          </View>
-          <View style={styles.chartBars}>
-            {monthly.map((m) => {
-              const ratio = m.collected / maxMonthly;
-              const monthLabel = m.month.substring(5); // MM
-              const isCurrentMonth = m.month === new Date().toISOString().substring(0, 7);
-              return (
-                <View key={m.month} style={styles.barCol}>
-                  <Text style={styles.barAmount} numberOfLines={1}>
-                    {m.collected > 0 ? `${Math.round(m.collected / 1000)}k` : ''}
-                  </Text>
-                  <View style={styles.barTrack}>
-                    <View style={[
-                      styles.barFill,
-                      { flex: ratio || 0.02 },
-                      isCurrentMonth && { backgroundColor: colors.success },
-                    ]} />
-                    <View style={{ flex: 1 - (ratio || 0.02) }} />
-                  </View>
-                  <Text style={[styles.barLabel, isCurrentMonth && { color: colors.success, fontWeight: '700' }]}>
-                    {monthLabel}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
+          <Text style={styles.chartTitle}>Cobros — últimos 7 días</Text>
+          <LineChart
+            data={{ labels: chartLabels, datasets: [{ data: chartData, strokeWidth: 2 }] }}
+            width={CHART_WIDTH - 28}
+            height={160}
+            yAxisLabel="$"
+            yAxisSuffix=""
+            formatYLabel={(v) => {
+              const n = parseFloat(v);
+              return n >= 1000 ? `${Math.round(n / 1000)}k` : v;
+            }}
+            chartConfig={{
+              backgroundColor: colors.surface,
+              backgroundGradientFrom: colors.surface,
+              backgroundGradientTo: colors.surface,
+              decimalPlaces: 0,
+              color: (opacity = 1) => `rgba(99, 102, 241, ${opacity})`,
+              labelColor: () => colors.textDim,
+              propsForDots: { r: '4', strokeWidth: '2', stroke: colors.primary },
+            }}
+            bezier
+            style={{ marginVertical: 4, borderRadius: 10 }}
+          />
         </View>
       )}
 
-      {stats.lowStockCount > 0 && (
-        <TouchableOpacity style={styles.lowStockAlert} onPress={() => router.push('/stock')} activeOpacity={0.8}>
-          <Ionicons name="warning" size={18} color={colors.warning} />
-          <Text style={styles.lowStockText}>{stats.lowStockCount} producto{stats.lowStockCount > 1 ? 's' : ''} con stock bajo</Text>
-          <Ionicons name="chevron-forward" size={16} color={colors.warning} />
-        </TouchableOpacity>
+      {/* Low stock widget */}
+      {lowStock.length > 0 && (
+        <View style={styles.lowStockCard}>
+          <TouchableOpacity
+            style={styles.lowStockHeader}
+            onPress={() => router.push('/stock')}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="warning" size={16} color={colors.warning} />
+            <Text style={styles.lowStockTitle}>
+              {lowStock.length} producto{lowStock.length > 1 ? 's' : ''} con stock bajo
+            </Text>
+            <Ionicons name="chevron-forward" size={14} color={colors.warning} />
+          </TouchableOpacity>
+          {lowStock.slice(0, 3).map((p) => (
+            <LowStockRow key={p.id} product={p} onPress={() => router.push(`/product/${p.id}`)} />
+          ))}
+          {lowStock.length > 3 && (
+            <TouchableOpacity onPress={() => router.push('/stock')} style={styles.viewMoreBtn}>
+              <Text style={styles.viewMoreText}>Ver los {lowStock.length - 3} restantes</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       )}
 
-      {/* Filter + pending */}
+      {/* Pending collections */}
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>Pendiente de cobro</Text>
         {pending.length > 0 && (
-          <Text style={styles.sectionCount}>{filtered.length}{filter !== 'all' ? `/${pending.length}` : ''}</Text>
+          <View style={styles.sectionBadge}>
+            <Text style={styles.sectionBadgeText}>{filtered.length}{filter !== 'all' ? `/${pending.length}` : ''}</Text>
+          </View>
         )}
       </View>
 
       {pending.length > 0 && (
         <View style={styles.filterRow}>
-          {FILTERS.map(f => (
+          {FILTERS.map((f) => (
             <TouchableOpacity
               key={f.key}
               style={[styles.filterBtn, filter === f.key && { backgroundColor: f.color + '22', borderColor: f.color }]}
@@ -162,75 +201,145 @@ export default function DashboardScreen() {
       {filtered.length === 0 ? (
         <View style={styles.emptyCard}>
           <Ionicons name="checkmark-circle" size={40} color={colors.success} />
-          <Text style={styles.emptyText}>{pending.length === 0 ? 'Todo al día' : 'Sin resultados para este filtro'}</Text>
+          <Text style={styles.emptyText}>
+            {pending.length === 0 ? 'Todo al día' : 'Sin resultados para este filtro'}
+          </Text>
         </View>
       ) : (
         filtered.map((inst) => (
-          <TouchableOpacity key={inst.id} style={styles.installmentCard}
-            onPress={() => router.push(`/sale/${inst.sale_id}`)} activeOpacity={0.7}>
-            <View style={[styles.statusDot, { backgroundColor: getStatusColor(inst.status) + '33' }]}>
-              <View style={[styles.dot, { backgroundColor: getStatusColor(inst.status) }]} />
-            </View>
-            <View style={styles.instInfo}>
-              <Text style={styles.instClient} numberOfLines={1}>{inst.client_name}</Text>
-              <Text style={styles.instProduct} numberOfLines={1}>{inst.product_name}</Text>
-              <Text style={styles.instDate}>Vence: {formatDate(inst.due_date)}</Text>
-            </View>
-            <View style={styles.instRight}>
-              <Text style={styles.instAmount}>{formatCurrency(inst.expected_amount)}</Text>
-              <Text style={[styles.instStatus, { color: getStatusColor(inst.status) }]}>{getStatusLabel(inst.status)}</Text>
-              {inst.paid_amount > 0 && <Text style={styles.instPaid}>Pagado: {formatCurrency(inst.paid_amount)}</Text>}
-            </View>
-          </TouchableOpacity>
+          <InstallmentRow
+            key={inst.id}
+            inst={inst}
+            onPress={() => router.push(`/sale/${inst.sale_id}`)}
+          />
         ))
       )}
     </ScrollView>
   );
 }
 
-function StatCard({ icon, label, value, color }: any) {
+interface StatCardProps {
+  icon: string;
+  label: string;
+  value: number;
+  color: string;
+  onPress?: () => void;
+}
+
+function StatCard({ icon, label, value, color, onPress }: StatCardProps) {
   return (
-    <View style={[styles.statCard, { borderTopColor: color }]}>
-      <Ionicons name={icon} size={22} color={color} />
+    <TouchableOpacity
+      style={[styles.statCard, { borderTopColor: color }]}
+      onPress={onPress}
+      activeOpacity={onPress ? 0.7 : 1}
+    >
+      <Ionicons name={icon as Parameters<typeof Ionicons>[0]['name']} size={22} color={color} />
       <Text style={styles.statValue}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
-    </View>
+    </TouchableOpacity>
+  );
+}
+
+function LowStockRow({ product, onPress }: { product: LowStockProduct; onPress: () => void }) {
+  const isEmpty = product.stock === 0;
+  return (
+    <TouchableOpacity style={styles.lowStockRow} onPress={onPress} activeOpacity={0.7}>
+      <View style={[styles.stockDot, { backgroundColor: isEmpty ? colors.danger + '22' : colors.warning + '22' }]}>
+        <Text style={[styles.stockDotNum, { color: isEmpty ? colors.danger : colors.warning }]}>
+          {product.stock}
+        </Text>
+      </View>
+      <Text style={styles.lowStockName} numberOfLines={1}>{product.name}</Text>
+      <Text style={styles.lowStockMin}>mín. {product.min_stock}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function InstallmentRow({ inst, onPress }: { inst: TodayInstallment; onPress: () => void }) {
+  const statusColor = getStatusColor(inst.status);
+  return (
+    <TouchableOpacity style={styles.installmentCard} onPress={onPress} activeOpacity={0.7}>
+      <View style={[styles.statusDot, { backgroundColor: statusColor + '33' }]}>
+        <View style={[styles.dot, { backgroundColor: statusColor }]} />
+      </View>
+      <View style={styles.instInfo}>
+        <Text style={styles.instClient} numberOfLines={1}>{inst.client_name}</Text>
+        <Text style={styles.instProduct} numberOfLines={1}>{inst.product_name}</Text>
+        <Text style={styles.instDate}>Vence: {formatDate(inst.due_date)}</Text>
+      </View>
+      <View style={styles.instRight}>
+        <Text style={styles.instAmount}>{formatCurrency(inst.expected_amount)}</Text>
+        <Text style={[styles.instStatus, { color: statusColor }]}>{getStatusLabel(inst.status)}</Text>
+        {inst.paid_amount > 0 && (
+          <Text style={styles.instPaid}>Pagado: {formatCurrency(inst.paid_amount)}</Text>
+        )}
+      </View>
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 32 },
+  errorCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: colors.danger + '18', borderRadius: 12, padding: 12,
+    marginBottom: 12, borderWidth: 1, borderColor: colors.danger + '40',
+  },
+  errorText: { flex: 1, fontSize: 13, color: colors.danger },
   statsRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
-  statCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 14, padding: 14, alignItems: 'center', gap: 4, borderTopWidth: 3 },
+  statCard: {
+    flex: 1, backgroundColor: colors.surface, borderRadius: 14, padding: 14,
+    alignItems: 'center', gap: 4, borderTopWidth: 3,
+  },
   statValue: { fontSize: 22, fontWeight: '800', color: colors.text },
   statLabel: { fontSize: 11, color: colors.textMuted, fontWeight: '500' },
   plRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
-  plCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 14, padding: 14, borderLeftWidth: 3 },
-  plLabel: { fontSize: 11, color: colors.textMuted, fontWeight: '500', marginBottom: 4 },
+  plCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 14, padding: 14, borderLeftWidth: 3, gap: 2 },
+  plLabel: { fontSize: 11, color: colors.textMuted, fontWeight: '500' },
   plValue: { fontSize: 18, fontWeight: '800' },
-  netCard: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', marginBottom: 12, borderLeftWidth: 3 },
+  plHint: { fontSize: 10, color: colors.textDim, marginTop: 2 },
+  netCard: {
+    backgroundColor: colors.surface, borderRadius: 14, padding: 14,
+    flexDirection: 'row', alignItems: 'center', marginBottom: 12, borderLeftWidth: 3,
+  },
   netLabel: { fontSize: 12, color: colors.textMuted, fontWeight: '500' },
   netValue: { fontSize: 20, fontWeight: '800' },
-  chartCard: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, marginBottom: 12 },
-  chartTitle: { fontSize: 12, fontWeight: '600', color: colors.textMuted },
-  chartBars: { flexDirection: 'row', alignItems: 'flex-end', height: 90, gap: 4 },
-  barCol: { flex: 1, alignItems: 'center', height: 90, justifyContent: 'flex-end' },
-  barAmount: { fontSize: 8, color: colors.textDim, marginBottom: 2 },
-  barTrack: { width: '80%', flex: 1, flexDirection: 'column-reverse' },
-  barFill: { backgroundColor: colors.primary + 'bb', borderRadius: 3 },
-  barLabel: { fontSize: 9, color: colors.textDim, marginTop: 3 },
-  lowStockAlert: { backgroundColor: colors.warning + '22', borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16, borderWidth: 1, borderColor: colors.warning + '44' },
-  lowStockText: { flex: 1, color: colors.warning, fontWeight: '600', fontSize: 13 },
+  chartCard: {
+    backgroundColor: colors.surface, borderRadius: 14, padding: 14, marginBottom: 12,
+  },
+  chartTitle: { fontSize: 12, fontWeight: '700', color: colors.textMuted, marginBottom: 8 },
+  lowStockCard: {
+    backgroundColor: colors.warning + '12', borderRadius: 14, padding: 14,
+    borderWidth: 1, borderColor: colors.warning + '30', marginBottom: 16, gap: 8,
+  },
+  lowStockHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  lowStockTitle: { flex: 1, fontWeight: '700', fontSize: 13, color: colors.warning },
+  lowStockRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4 },
+  stockDot: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  stockDotNum: { fontSize: 14, fontWeight: '800' },
+  lowStockName: { flex: 1, fontSize: 13, color: colors.text, fontWeight: '600' },
+  lowStockMin: { fontSize: 11, color: colors.textDim },
+  viewMoreBtn: { paddingTop: 4, alignItems: 'center' },
+  viewMoreText: { fontSize: 12, color: colors.warning, fontWeight: '600' },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
-  sectionCount: { backgroundColor: colors.primary, color: colors.white, fontSize: 12, fontWeight: '700', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
+  sectionBadge: {
+    backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2,
+  },
+  sectionBadgeText: { color: colors.white, fontSize: 12, fontWeight: '700' },
   filterRow: { flexDirection: 'row', gap: 6, marginBottom: 12 },
-  filterBtn: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
+  filterBtn: {
+    borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface,
+  },
   filterText: { fontSize: 12, color: colors.textDim },
   emptyCard: { backgroundColor: colors.surface, borderRadius: 14, padding: 32, alignItems: 'center', gap: 10 },
   emptyText: { color: colors.textMuted, fontSize: 15 },
-  installmentCard: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 10 },
+  installmentCard: {
+    backgroundColor: colors.surface, borderRadius: 14, padding: 14,
+    flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 10,
+  },
   statusDot: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
   dot: { width: 10, height: 10, borderRadius: 5 },
   instInfo: { flex: 1 },

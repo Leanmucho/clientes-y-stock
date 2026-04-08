@@ -704,3 +704,46 @@ export async function getInventoryExport() {
     estado: p.stock === 0 ? 'Sin stock' : p.stock <= p.min_stock ? 'Stock bajo' : 'OK',
   }));
 }
+
+export async function getLowStockProducts(limit = 10): Promise<
+  { id: number; name: string; stock: number; min_stock: number; price: number }[]
+> {
+  const { data } = await supabase
+    .from('products')
+    .select('id, name, stock, min_stock, price')
+    .gt('min_stock', 0)
+    .order('stock', { ascending: true })
+    .limit(limit);
+  return ((data ?? []) as { id: number; name: string; stock: number; min_stock: number; price: number }[])
+    .filter((p) => p.stock <= p.min_stock);
+}
+
+export async function getWeeklySalesSummary(): Promise<
+  { day: string; label: string; total: number }[]
+> {
+  const now = new Date();
+  const days: { day: string; label: string; total: number }[] = [];
+
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const iso = d.toISOString().split('T')[0];
+    const label = d.toLocaleDateString('es-AR', { weekday: 'short' });
+    days.push({ day: iso, label, total: 0 });
+  }
+
+  const fromDate = days[0].day;
+  const { data } = await supabase
+    .from('installments')
+    .select('paid_date, paid_amount')
+    .gte('paid_date', fromDate)
+    .eq('status', 'paid');
+
+  for (const row of (data ?? []) as { paid_date: string | null; paid_amount: number }[]) {
+    if (!row.paid_date) continue;
+    const entry = days.find((d) => d.day === row.paid_date);
+    if (entry) entry.total += row.paid_amount ?? 0;
+  }
+
+  return days;
+}
