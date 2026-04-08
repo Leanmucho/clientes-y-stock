@@ -10,6 +10,13 @@ import { Product } from '../../types';
 import { colors } from '../../lib/colors';
 import { formatCurrency, formatInputNumber, getTodayISO, generateInstallmentDates } from '../../lib/utils';
 
+interface ValidationError {
+  field: string;
+  message: string;
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 interface ItemForm {
   key: string;
   product: Product | null;
@@ -34,6 +41,7 @@ export default function NewSaleScreen() {
   const [startDate, setStartDate] = useState(getTodayISO());
   const [deliveryDate, setDeliveryDate] = useState('');
   const [saving, setSaving] = useState(false);
+  const [touched, setTouched] = useState(false);
 
   const [products, setProducts] = useState<Product[]>([]);
   const [showProductModal, setShowProductModal] = useState<string | null>(null);
@@ -67,13 +75,45 @@ export default function NewSaleScreen() {
     ? generateInstallmentDates(startDate, parseInt(paymentDay), Math.min(count, 3))
     : [];
 
-  const handleSave = async () => {
+  const validationErrors: ValidationError[] = (() => {
+    const errors: ValidationError[] = [];
     const validItems = items.filter(it => it.productName.trim() && (parseFloat(it.unitPrice) || 0) > 0);
-    if (validItems.length === 0) return Alert.alert('Requerido', 'Agregá al menos un producto con nombre y precio.');
-    if (totalAmount <= 0) return Alert.alert('Requerido', 'El monto total debe ser mayor a 0.');
-    if (count <= 0) return Alert.alert('Requerido', 'Ingresá la cantidad de cuotas.');
+
+    if (validItems.length === 0) {
+      errors.push({ field: 'items', message: 'Agregá al menos un producto con nombre y precio mayor a $0' });
+    } else {
+      const hasEmptyName = items.some(it => !it.productName.trim() && (parseFloat(it.unitPrice) || 0) > 0);
+      const hasEmptyPrice = items.some(it => it.productName.trim() && (parseFloat(it.unitPrice) || 0) === 0);
+      if (hasEmptyName) errors.push({ field: 'items', message: 'Uno o más productos no tienen nombre' });
+      if (hasEmptyPrice) errors.push({ field: 'items', message: 'Uno o más productos no tienen precio' });
+    }
+
+    if (count <= 0) {
+      errors.push({ field: 'installments', message: 'Ingresá la cantidad de cuotas (ej: 6, 12, 24)' });
+    }
+
     const day = parseInt(paymentDay);
-    if (!day || day < 1 || day > 31) return Alert.alert('Inválido', 'El día de pago debe ser entre 1 y 31.');
+    if (!paymentDay || !day || day < 1 || day > 31) {
+      errors.push({ field: 'paymentDay', message: 'El día de pago debe ser un número entre 1 y 31' });
+    }
+
+    if (!startDate || !ISO_DATE_RE.test(startDate)) {
+      errors.push({ field: 'startDate', message: 'La fecha de inicio debe tener el formato AAAA-MM-DD (ej: 2025-06-01)' });
+    }
+
+    if (deliveryDate && !ISO_DATE_RE.test(deliveryDate)) {
+      errors.push({ field: 'deliveryDate', message: 'La fecha de entrega debe tener el formato AAAA-MM-DD' });
+    }
+
+    return errors;
+  })();
+
+  const hasErrors = validationErrors.length > 0;
+
+  const handleSave = async () => {
+    setTouched(true);
+    const validItems = items.filter(it => it.productName.trim() && (parseFloat(it.unitPrice) || 0) > 0);
+    if (hasErrors) return;
 
     for (const it of validItems) {
       const qty = parseInt(it.quantity) || 1;
@@ -296,8 +336,16 @@ export default function NewSaleScreen() {
         <Text style={[styles.sectionLabel, { marginTop: 12 }]}>PLAN DE CUOTAS</Text>
         <View style={styles.field}>
           <Text style={styles.fieldLabel}>Cantidad de cuotas *</Text>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="layers-outline" size={14} color={colors.textDim} style={{ marginRight: 6 }} />
+          <View style={[
+            styles.inputWrapper,
+            touched && count <= 0 && styles.inputError,
+          ]}>
+            <Ionicons
+              name="layers-outline"
+              size={14}
+              color={touched && count <= 0 ? colors.danger : colors.textDim}
+              style={{ marginRight: 6 }}
+            />
             <TextInput
               style={styles.input}
               value={installmentsCount}
@@ -310,8 +358,16 @@ export default function NewSaleScreen() {
         </View>
         <View style={styles.field}>
           <Text style={styles.fieldLabel}>Día de pago (1-31)</Text>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="calendar-outline" size={14} color={colors.textDim} style={{ marginRight: 6 }} />
+          <View style={[
+            styles.inputWrapper,
+            touched && (!paymentDay || parseInt(paymentDay) < 1 || parseInt(paymentDay) > 31) && styles.inputError,
+          ]}>
+            <Ionicons
+              name="calendar-outline"
+              size={14}
+              color={touched && (!paymentDay || parseInt(paymentDay) < 1 || parseInt(paymentDay) > 31) ? colors.danger : colors.textDim}
+              style={{ marginRight: 6 }}
+            />
             <TextInput
               style={styles.input}
               value={paymentDay}
@@ -347,8 +403,16 @@ export default function NewSaleScreen() {
         <Text style={[styles.sectionLabel, { marginTop: 12 }]}>FECHAS</Text>
         <View style={styles.field}>
           <Text style={styles.fieldLabel}>Fecha de inicio (AAAA-MM-DD)</Text>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="today-outline" size={14} color={colors.textDim} style={{ marginRight: 6 }} />
+          <View style={[
+            styles.inputWrapper,
+            touched && (!startDate || !ISO_DATE_RE.test(startDate)) && styles.inputError,
+          ]}>
+            <Ionicons
+              name="today-outline"
+              size={14}
+              color={touched && (!startDate || !ISO_DATE_RE.test(startDate)) ? colors.danger : colors.textDim}
+              style={{ marginRight: 6 }}
+            />
             <TextInput
               style={styles.input}
               value={startDate}
@@ -360,9 +424,17 @@ export default function NewSaleScreen() {
           </View>
         </View>
         <View style={styles.field}>
-          <Text style={styles.fieldLabel}>Fecha de entrega (AAAA-MM-DD)</Text>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="cube-outline" size={14} color={colors.textDim} style={{ marginRight: 6 }} />
+          <Text style={styles.fieldLabel}>Fecha de entrega (AAAA-MM-DD) — opcional</Text>
+          <View style={[
+            styles.inputWrapper,
+            touched && !!deliveryDate && !ISO_DATE_RE.test(deliveryDate) && styles.inputError,
+          ]}>
+            <Ionicons
+              name="cube-outline"
+              size={14}
+              color={touched && !!deliveryDate && !ISO_DATE_RE.test(deliveryDate) ? colors.danger : colors.textDim}
+              style={{ marginRight: 6 }}
+            />
             <TextInput
               style={styles.input}
               value={deliveryDate}
@@ -374,13 +446,15 @@ export default function NewSaleScreen() {
           </View>
         </View>
 
+        <ValidationBanner errors={validationErrors} visible={true} />
+
         <TouchableOpacity
-          style={[styles.saveButton, saving && { opacity: 0.6 }]}
+          style={[styles.saveButton, (saving || (touched && hasErrors)) && { opacity: 0.6 }]}
           onPress={handleSave}
           disabled={saving}
           activeOpacity={0.8}
         >
-          <Ionicons name="checkmark-circle" size={20} color={colors.white} />
+          <Ionicons name={hasErrors ? 'alert-circle' : 'checkmark-circle'} size={20} color={colors.white} />
           <Text style={styles.saveButtonText}>{saving ? 'Guardando...' : 'Registrar Venta'}</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -429,6 +503,71 @@ function SRow({ label, value, highlight }: { label: string; value: string; highl
   );
 }
 
+function ValidationBanner({ errors, visible }: { errors: ValidationError[]; visible: boolean }) {
+  if (!visible) return null;
+
+  if (errors.length === 0) {
+    return (
+      <View style={vStyles.readyCard}>
+        <Ionicons name="checkmark-circle" size={18} color={colors.success} />
+        <Text style={vStyles.readyText}>Todo completo — podés registrar la venta</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={vStyles.card}>
+      <View style={vStyles.header}>
+        <Ionicons name="alert-circle" size={17} color={colors.danger} />
+        <Text style={vStyles.headerText}>
+          {errors.length === 1 ? 'Falta completar 1 campo' : `Faltan completar ${errors.length} campos`}
+        </Text>
+      </View>
+      {errors.map((err, i) => (
+        <View key={i} style={vStyles.row}>
+          <View style={vStyles.bullet} />
+          <Text style={vStyles.message}>{err.message}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+const vStyles = StyleSheet.create({
+  card: {
+    backgroundColor: colors.danger + '12',
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 16,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: colors.danger + '35',
+    gap: 8,
+  },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  headerText: { fontSize: 13, fontWeight: '700', color: colors.danger },
+  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingLeft: 2 },
+  bullet: {
+    width: 5, height: 5, borderRadius: 3,
+    backgroundColor: colors.danger,
+    marginTop: 6, flexShrink: 0,
+  },
+  message: { flex: 1, fontSize: 13, color: colors.danger, lineHeight: 19 },
+  readyCard: {
+    backgroundColor: colors.success + '15',
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 16,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: colors.success + '40',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  readyText: { fontSize: 13, fontWeight: '600', color: colors.success },
+});
+
 const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 40 },
   clientBadge: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.primary + '22', borderRadius: 10, padding: 10, marginBottom: 16 },
@@ -449,6 +588,7 @@ const styles = StyleSheet.create({
   field: { marginBottom: 8 },
   fieldLabel: { fontSize: 11, color: colors.textMuted, fontWeight: '600', marginBottom: 4, marginLeft: 2 },
   inputWrapper: { backgroundColor: colors.bg, borderRadius: 10, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 10, borderWidth: 1, borderColor: colors.border },
+  inputError: { borderColor: colors.danger, backgroundColor: colors.danger + '08' },
   prefix: { color: colors.textMuted, fontSize: 14, marginRight: 2 },
   input: { flex: 1, color: colors.text, fontSize: 14 },
   itemRow: { flexDirection: 'row', gap: 8 },
