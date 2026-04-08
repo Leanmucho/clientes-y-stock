@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl,
-  Modal, TextInput, Alert, KeyboardAvoidingView, Platform, ActivityIndicator,
+  Modal, TextInput, Alert, KeyboardAvoidingView, Platform, ActivityIndicator, Share,
 } from 'react-native';
 import { useFocusEffect, useRouter, useLocalSearchParams, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,6 +27,7 @@ export default function ClientDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -239,6 +240,55 @@ export default function ClientDetailScreen() {
     }
   };
 
+  const shareClientDebt = async () => {
+    if (!client) return;
+    setSharing(true);
+    try {
+      const { sales: allSales, installments } = await getClientDataForExport(client.id);
+
+      type RawInstallment = { sale_id: number; status: string; paid_amount: number; expected_amount: number };
+      const instBySale: Record<number, RawInstallment[]> = {};
+      for (const inst of installments as RawInstallment[]) {
+        if (!instBySale[inst.sale_id]) instBySale[inst.sale_id] = [];
+        instBySale[inst.sale_id].push(inst);
+      }
+
+      const lines: string[] = [
+        `📋 *ESTADO DE CUENTA — ${client.name.toUpperCase()}*`,
+        `──────────────────────────────`,
+      ];
+      if (client.phone) lines.push(`📞 ${client.phone}`);
+      lines.push(`💰 *Deuda total: ${formatCurrency(pendingDebt)}*`);
+      lines.push('');
+
+      for (const s of allSales as Sale[]) {
+        const insts = instBySale[s.id] ?? [];
+        const paidCount = insts.filter((i) => i.status === 'paid').length;
+        const totalPaid =
+          insts.reduce((acc, i) => acc + (i.paid_amount ?? 0), 0) + s.advance_payment;
+        const salePending = insts
+          .filter((i) => i.status !== 'paid')
+          .reduce((acc, i) => acc + (i.expected_amount - (i.paid_amount ?? 0)), 0);
+
+        if (salePending <= 0) continue;
+
+        lines.push(`📦 *${s.product_name}*`);
+        lines.push(`   Cuotas pagadas: ${paidCount} / ${s.installments_count}`);
+        lines.push(`   Ya abonó: ${formatCurrency(totalPaid)}`);
+        lines.push(`   *Saldo pendiente: ${formatCurrency(salePending)}*`);
+        lines.push('');
+      }
+
+      lines.push(`📅 Fecha: ${formatDate(getTodayISO())}`);
+
+      await Share.share({ message: lines.join('\n') });
+    } catch (e: unknown) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo generar el resumen.');
+    } finally {
+      setSharing(false);
+    }
+  };
+
   if (loading) return <Loading />;
   if (!client) return <View style={styles.center}><Text style={{ color: colors.textMuted }}>Cliente no encontrado</Text></View>;
 
@@ -303,6 +353,28 @@ export default function ClientDetailScreen() {
               <Text style={styles.advancePayBtnSub}>Se aplicará a las cuotas pendientes</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.white + 'aa'} />
+          </TouchableOpacity>
+        )}
+
+        {/* Share full debt summary */}
+        {pendingDebt > 0 && (
+          <TouchableOpacity
+            style={styles.shareDebtBtn}
+            onPress={shareClientDebt}
+            disabled={sharing}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="share-social-outline" size={18} color={colors.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.shareDebtTitle}>Compartir estado de deuda</Text>
+              <Text style={styles.shareDebtSub}>
+                Todas las compras con saldo pendiente
+              </Text>
+            </View>
+            {sharing
+              ? <ActivityIndicator size="small" color={colors.primary} />
+              : <Ionicons name="chevron-forward" size={16} color={colors.primary + '88'} />
+            }
           </TouchableOpacity>
         )}
 
@@ -574,6 +646,13 @@ const styles = StyleSheet.create({
   },
   advancePayBtnTitle: { color: colors.white, fontWeight: '700', fontSize: 15 },
   advancePayBtnSub: { color: colors.white + 'cc', fontSize: 11, marginTop: 1 },
+  shareDebtBtn: {
+    backgroundColor: colors.primary + '12', borderRadius: 14, padding: 14,
+    flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20,
+    borderWidth: 1, borderColor: colors.primary + '30',
+  },
+  shareDebtTitle: { color: colors.primary, fontWeight: '700', fontSize: 14 },
+  shareDebtSub: { color: colors.primary + 'aa', fontSize: 11, marginTop: 1 },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
   addSaleButton: { backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 4 },
