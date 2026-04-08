@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { Client, Sale, SaleItem, Installment, Product, ClientPayment, Expense, Supplier, TeamMember } from '../types';
+import { Category, Client, Sale, SaleItem, Installment, Product, ClientPayment, Expense, Supplier, TeamMember } from '../types';
 import { cacheGet, cacheSet, cacheInvalidate, cacheInvalidatePrefix } from './cache';
 
 export const EXPENSE_CATEGORIES = ['Alquiler', 'Servicios', 'Stock/Compras', 'Personal', 'Transporte', 'Marketing', 'Impuestos', 'Otro'];
@@ -44,6 +44,27 @@ export async function deleteClient(id: number) {
   if (error) throw new Error(`Error al eliminar cliente: ${error.message}`);
   cacheInvalidate('clients', `client-${id}`);
   cacheInvalidatePrefix(`sales-client-${id}`);
+}
+
+// --- CATEGORIES ---
+export async function getCategories(): Promise<Category[]> {
+  const { data } = await supabase.from('categories').select('*').order('name');
+  return (data ?? []) as Category[];
+}
+
+export async function createCategory(name: string, description = ''): Promise<Category> {
+  const { data, error } = await supabase
+    .from('categories')
+    .insert({ name, description })
+    .select('*')
+    .single();
+  if (error) throw new Error(`Error al crear categoría: ${error.message}`);
+  return data as Category;
+}
+
+export async function deleteCategory(id: number): Promise<void> {
+  const { error } = await supabase.from('categories').delete().eq('id', id);
+  if (error) throw new Error(`Error al eliminar categoría: ${error.message}`);
 }
 
 // --- PRODUCTS ---
