@@ -75,6 +75,7 @@ export default function NewSaleScreen() {
   const [items, setItems] = useState<ItemForm[]>([
     { key: nextKey(), product: null, productName: '', quantity: '1', unitPrice: '' },
   ]);
+  const [isContado, setIsContado] = useState(false);
   const [advancePayment, setAdvancePayment] = useState('');
   const [installmentsCount, setInstallmentsCount] = useState('');
   const [paymentDay, setPaymentDay] = useState('10');
@@ -124,9 +125,22 @@ export default function NewSaleScreen() {
       (acc, it) => acc + (parseInt(it.quantity) || 1) * (parseFloat(it.unitPrice) || 0),
       0,
     );
-    const advance = parseFloat(advancePayment) || 0;
+
+    // Contado: advance = total, 1 cuota pagada al instante
+    if (isContado) {
+      return {
+        totalAmount,
+        advance: totalAmount,
+        count: 1,
+        remaining: 0,
+        installmentAmount: totalAmount,
+        previewDates: [startDate],
+      };
+    }
+
+    const advance = Math.min(parseFloat(advancePayment) || 0, totalAmount);
     const count = parseInt(installmentsCount) || 0;
-    const remaining = totalAmount - advance;
+    const remaining = Math.max(totalAmount - advance, 0);
     const installmentAmount = count > 0 ? remaining / count : 0;
 
     const previewCount = Math.min(count, 3);
@@ -151,7 +165,7 @@ export default function NewSaleScreen() {
     }
 
     return { totalAmount, advance, count, remaining, installmentAmount, previewDates };
-  }, [items, advancePayment, installmentsCount, paymentDay, startDate, frequency]);
+  }, [items, advancePayment, installmentsCount, paymentDay, startDate, frequency, isContado]);
 
   const validationErrors: ValidationError[] = (() => {
     const errors: ValidationError[] = [];
@@ -166,13 +180,26 @@ export default function NewSaleScreen() {
       if (hasEmptyPrice) errors.push({ field: 'items', message: 'Uno o más productos no tienen precio' });
     }
 
-    if (count <= 0) {
-      errors.push({ field: 'installments', message: 'Ingresá la cantidad de cuotas (ej: 6, 12, 24)' });
-    }
+    if (!isContado) {
+      const rawAdvance = parseFloat(advancePayment) || 0;
+      if (rawAdvance > 0 && validItems.length > 0) {
+        const total = validItems.reduce(
+          (acc, it) => acc + (parseInt(it.quantity) || 1) * (parseFloat(it.unitPrice) || 0), 0
+        );
+        if (rawAdvance > total) {
+          errors.push({ field: 'advance', message: `El anticipo ($${rawAdvance}) no puede superar el total ($${total})` });
+        }
+      }
 
-    const day = parseInt(paymentDay);
-    if (!paymentDay || !day || day < 1 || day > 31) {
-      errors.push({ field: 'paymentDay', message: 'El día de pago debe ser un número entre 1 y 31' });
+      if (count <= 0) {
+        errors.push({ field: 'installments', message: 'Ingresá la cantidad de cuotas (ej: 6, 12, 24)' });
+      }
+      if (frequency === 'monthly') {
+        const day = parseInt(paymentDay);
+        if (!paymentDay || !day || day < 1 || day > 31) {
+          errors.push({ field: 'paymentDay', message: 'El día de pago debe ser un número entre 1 y 31' });
+        }
+      }
     }
 
     if (!startDate || !ISO_DATE_RE.test(startDate)) {
@@ -190,8 +217,9 @@ export default function NewSaleScreen() {
 
   const handleSave = async () => {
     setTouched(true);
-    const validItems = items.filter(it => it.productName.trim() && (parseFloat(it.unitPrice) || 0) > 0);
     if (hasErrors) return;
+    const day = parseInt(paymentDay) || 10;
+    const validItems = items.filter(it => it.productName.trim() && (parseFloat(it.unitPrice) || 0) > 0);
 
     for (const it of validItems) {
       const qty = parseInt(it.quantity) || 1;
@@ -235,17 +263,31 @@ export default function NewSaleScreen() {
         notes: '',
       }, saleItems);
 
-      const dates = buildInstallmentDates(startDate, day, count, frequency);
-      await createInstallments(dates.map((date, i) => ({
-        sale_id: saleId,
-        installment_number: i + 1,
-        due_date: date,
-        expected_amount: installmentAmount,
-        paid_amount: 0,
-        paid_date: null,
-        status: 'pending' as const,
-        notes: '',
-      })));
+      if (isContado) {
+        // Pago total al contado: 1 cuota marcada como pagada en el día de hoy
+        await createInstallments([{
+          sale_id: saleId,
+          installment_number: 1,
+          due_date: startDate,
+          expected_amount: totalAmount,
+          paid_amount: totalAmount,
+          paid_date: startDate,
+          status: 'paid' as const,
+          notes: 'Pago al contado',
+        }]);
+      } else {
+        const dates = buildInstallmentDates(startDate, day, count, frequency);
+        await createInstallments(dates.map((date, i) => ({
+          sale_id: saleId,
+          installment_number: i + 1,
+          due_date: date,
+          expected_amount: installmentAmount,
+          paid_amount: 0,
+          paid_date: null,
+          status: 'pending' as const,
+          notes: '',
+        })));
+      }
       router.replace(`/sale/${saleId}`);
     } catch (e: any) {
       Alert.alert('Error al guardar', e?.message ?? 'No se pudo guardar la venta. Verificá que hayas ejecutado el SQL en Supabase.');
@@ -411,99 +453,130 @@ export default function NewSaleScreen() {
           );
         })()}
 
-        {/* Installment plan */}
-        <Text style={[styles.sectionLabel, { marginTop: 12 }]}>PLAN DE CUOTAS</Text>
-
-        <View style={styles.field}>
-          <Text style={styles.fieldLabel}>Frecuencia de pago</Text>
-          <View style={styles.freqRow}>
-            {FREQUENCIES.map((f) => (
-              <TouchableOpacity
-                key={f.value}
-                style={[styles.freqBtn, frequency === f.value && styles.freqBtnActive]}
-                onPress={() => handleFrequencyChange(f.value)}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.freqText, frequency === f.value && styles.freqTextActive]}>
-                  {f.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        <View style={styles.field}>
-          <Text style={styles.fieldLabel}>Cantidad de cuotas *</Text>
-          <View style={[
-            styles.inputWrapper,
-            touched && count <= 0 && styles.inputError,
-          ]}>
-            <Ionicons
-              name="layers-outline"
-              size={14}
-              color={touched && count <= 0 ? colors.danger : colors.textDim}
-              style={{ marginRight: 6 }}
-            />
-            <TextInput
-              style={styles.input}
-              value={installmentsCount}
-              onChangeText={setInstallmentsCount}
-              placeholder="Ej: 12"
-              placeholderTextColor={colors.textDim}
-              keyboardType="numeric"
-            />
-          </View>
-        </View>
-        <View style={styles.field}>
-          <Text style={styles.fieldLabel}>Día de pago (1-31)</Text>
-          <View style={[
-            styles.inputWrapper,
-            touched && (!paymentDay || parseInt(paymentDay) < 1 || parseInt(paymentDay) > 31) && styles.inputError,
-          ]}>
-            <Ionicons
-              name="calendar-outline"
-              size={14}
-              color={touched && (!paymentDay || parseInt(paymentDay) < 1 || parseInt(paymentDay) > 31) ? colors.danger : colors.textDim}
-              style={{ marginRight: 6 }}
-            />
-            <TextInput
-              style={styles.input}
-              value={paymentDay}
-              onChangeText={setPaymentDay}
-              placeholder="Ej: 10"
-              placeholderTextColor={colors.textDim}
-              keyboardType="numeric"
-            />
-          </View>
-        </View>
-
-        {installmentAmount > 0 && (
-          <View style={styles.installmentPreview}>
-            <View style={styles.previewHeader}>
-              <Ionicons name="information-circle" size={16} color={colors.primary} />
-              <Text style={styles.previewTitle}>Resumen del plan</Text>
-            </View>
-            <Text style={styles.previewAmount}>
-              {count} cuotas de{' '}
-              <Text style={{ color: colors.primary, fontWeight: '800' }}>
-                {formatCurrency(installmentAmount)}
-              </Text>
-              {frequency === 'biweekly' ? ' cada 15 días' : frequency === 'weekly' ? ' por semana' : ' por mes'}
+        {/* Contado toggle */}
+        <TouchableOpacity
+          style={[styles.contadoBtn, isContado && styles.contadoBtnActive]}
+          onPress={() => setIsContado(prev => !prev)}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name={isContado ? 'checkmark-circle' : 'cash-outline'}
+            size={20}
+            color={isContado ? colors.white : colors.success}
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.contadoBtnTitle, isContado && { color: colors.white }]}>
+              Pago al contado
             </Text>
-            {durationLabel(count, frequency) !== '' && (
-              <Text style={styles.previewDuration}>
-                Duración aproximada: {durationLabel(count, frequency)}
-              </Text>
-            )}
-            <View style={styles.datesPreview}>
-              {previewDates.map((d, i) => (
-                <View key={i} style={styles.dateChip}>
-                  <Text style={styles.dateChipText}>Cuota {i + 1}: {d.split('-').reverse().join('/')}</Text>
-                </View>
-              ))}
-              {count > 3 && <Text style={styles.moreDates}>... y {count - 3} cuotas más</Text>}
-            </View>
+            <Text style={[styles.contadoBtnSub, isContado && { color: colors.white + 'cc' }]}>
+              {isContado ? 'El cliente pagó todo ahora ✓' : 'Tocá si el cliente paga todo en el momento'}
+            </Text>
           </View>
+          <View style={[styles.contadoToggle, isContado && styles.contadoToggleActive]}>
+            <View style={[styles.contadoThumb, isContado && styles.contadoThumbActive]} />
+          </View>
+        </TouchableOpacity>
+
+        {/* Installment plan — solo si no es contado */}
+        {!isContado && <Text style={[styles.sectionLabel, { marginTop: 12 }]}>PLAN DE CUOTAS</Text>}
+
+        {!isContado && (
+          <>
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>Frecuencia de pago</Text>
+              <View style={styles.freqRow}>
+                {FREQUENCIES.map((f) => (
+                  <TouchableOpacity
+                    key={f.value}
+                    style={[styles.freqBtn, frequency === f.value && styles.freqBtnActive]}
+                    onPress={() => handleFrequencyChange(f.value)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.freqText, frequency === f.value && styles.freqTextActive]}>
+                      {f.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.field}>
+              <Text style={styles.fieldLabel}>Cantidad de cuotas *</Text>
+              <View style={[
+                styles.inputWrapper,
+                touched && count <= 0 && styles.inputError,
+              ]}>
+                <Ionicons
+                  name="layers-outline"
+                  size={14}
+                  color={touched && count <= 0 ? colors.danger : colors.textDim}
+                  style={{ marginRight: 6 }}
+                />
+                <TextInput
+                  style={styles.input}
+                  value={installmentsCount}
+                  onChangeText={setInstallmentsCount}
+                  placeholder="Ej: 12"
+                  placeholderTextColor={colors.textDim}
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+
+            {frequency === 'monthly' && (
+              <View style={styles.field}>
+                <Text style={styles.fieldLabel}>Día de pago (1-31)</Text>
+                <View style={[
+                  styles.inputWrapper,
+                  touched && (!paymentDay || parseInt(paymentDay) < 1 || parseInt(paymentDay) > 31) && styles.inputError,
+                ]}>
+                  <Ionicons
+                    name="calendar-outline"
+                    size={14}
+                    color={touched && (!paymentDay || parseInt(paymentDay) < 1 || parseInt(paymentDay) > 31) ? colors.danger : colors.textDim}
+                    style={{ marginRight: 6 }}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    value={paymentDay}
+                    onChangeText={setPaymentDay}
+                    placeholder="Ej: 10"
+                    placeholderTextColor={colors.textDim}
+                    keyboardType="numeric"
+                  />
+                </View>
+              </View>
+            )}
+
+            {installmentAmount > 0 && (
+              <View style={styles.installmentPreview}>
+                <View style={styles.previewHeader}>
+                  <Ionicons name="information-circle" size={16} color={colors.primary} />
+                  <Text style={styles.previewTitle}>Resumen del plan</Text>
+                </View>
+                <Text style={styles.previewAmount}>
+                  {count} cuotas de{' '}
+                  <Text style={{ color: colors.primary, fontWeight: '800' }}>
+                    {formatCurrency(installmentAmount)}
+                  </Text>
+                  {frequency === 'biweekly' ? ' cada 15 días' : frequency === 'weekly' ? ' por semana' : ' por mes'}
+                </Text>
+                {durationLabel(count, frequency) !== '' && (
+                  <Text style={styles.previewDuration}>
+                    Duración aproximada: {durationLabel(count, frequency)}
+                  </Text>
+                )}
+                <View style={styles.datesPreview}>
+                  {previewDates.map((d, i) => (
+                    <View key={i} style={styles.dateChip}>
+                      <Text style={styles.dateChipText}>Cuota {i + 1}: {d.split('-').reverse().join('/')}</Text>
+                    </View>
+                  ))}
+                  {count > 3 && <Text style={styles.moreDates}>... y {count - 3} cuotas más</Text>}
+                </View>
+              </View>
+            )}
+          </>
         )}
 
         {/* Dates */}
@@ -733,6 +806,25 @@ const styles = StyleSheet.create({
   stockPillText: { fontSize: 12, fontWeight: '700' },
   modalClose: { backgroundColor: colors.bg, borderRadius: 12, padding: 14, alignItems: 'center', marginTop: 12 },
   modalCloseText: { color: colors.textMuted, fontWeight: '700' },
+  contadoBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: colors.success + '15', borderRadius: 14, padding: 14,
+    borderWidth: 1.5, borderColor: colors.success + '40', marginTop: 12, marginBottom: 4,
+  },
+  contadoBtnActive: {
+    backgroundColor: colors.success, borderColor: colors.success,
+  },
+  contadoBtnTitle: { fontSize: 15, fontWeight: '700', color: colors.success },
+  contadoBtnSub: { fontSize: 12, color: colors.success + 'aa', marginTop: 1 },
+  contadoToggle: {
+    width: 40, height: 24, borderRadius: 12, backgroundColor: colors.border,
+    justifyContent: 'center', paddingHorizontal: 2,
+  },
+  contadoToggleActive: { backgroundColor: colors.white + '55' },
+  contadoThumb: {
+    width: 20, height: 20, borderRadius: 10, backgroundColor: colors.textDim,
+  },
+  contadoThumbActive: { backgroundColor: colors.white, alignSelf: 'flex-end' },
   freqRow: { flexDirection: 'row', gap: 8 },
   freqBtn: {
     flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center',
